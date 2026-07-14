@@ -41,11 +41,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nonce expired" }, { status: 400 });
   }
 
+  // Postgres/PostgREST returns timestamptz as "...+00:00", but the nonce route built the
+  // originally-signed message using JS's Date#toISOString() ("...Z") — reconstructing with
+  // the raw DB string would produce different bytes than what the wallet actually signed.
+  // Route both through toISOString() so they match.
   const message =
     `Sign in to Argus.\n\n` +
     `Wallet: ${address}\n` +
     `Nonce: ${parsed.data.nonce}\n` +
-    `Expires: ${nonceRow.expires_at}`;
+    `Expires: ${new Date(nonceRow.expires_at).toISOString()}`;
 
   const isValid = await publicClient.verifyMessage({
     address: address as `0x${string}`,
