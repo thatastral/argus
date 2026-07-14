@@ -1,0 +1,24 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# env
+.env
+.env.local
+.env*.local
+apps/web/.env
+apps/web/.env.local
+contracts/.env
+
+# foundry
+contracts/cache/
+contracts/out/
+contracts/broadcast/
+contracts/lib/
+
+# misc
+.DS_Store
+*.log
+.turbo/

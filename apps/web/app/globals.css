@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Design philosophy (PRD): white / black / grey only. No gradients, no glassmorphism,
+   no decorative UI. Closer to ChatGPT than a crypto dashboard. */
+
+:root {
+  --background: #ffffff;
+  --foreground: #111111;
+  --muted: #6b6b6b;
+  --border: #e5e5e5;
+  --surface: #f7f7f7;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-surface: var(--surface);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0d0d0d;
+    --foreground: #ededed;
+    --muted: #9a9a9a;
+    --border: #262626;
+    --surface: #171717;
+  }
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
