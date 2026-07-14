@@ -42,19 +42,26 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
   }
 
   if (!isConnected) {
-    const injectedConnector = connectors.find((c) => c.type === "injected") ?? connectors[0];
+    // Don't guess which injected connector to use — with multiple wallet extensions
+    // installed (e.g. Phantom + MetaMask), wagmi auto-registers one connector per
+    // EIP-6963-announced provider, and blindly picking "the first injected one" can grab
+    // a non-EVM provider (e.g. Phantom's EVM shim returning a Solana address, which then
+    // crashes viem's address checksum). List every detected wallet and let the user pick.
+    if (connectors.length === 0) {
+      return <p className="text-xs text-muted">No wallet found — install MetaMask or Rabby.</p>;
+    }
     return (
-      <div className="flex flex-col items-center gap-3">
-        <button
-          onClick={() => injectedConnector && connect({ connector: injectedConnector })}
-          disabled={isConnecting || !injectedConnector}
-          className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
-        >
-          {isConnecting ? "Connecting…" : "Connect Wallet"}
-        </button>
-        {!injectedConnector && (
-          <p className="text-xs text-muted">No injected wallet found — install MetaMask or Rabby.</p>
-        )}
+      <div className="flex flex-col items-center gap-2">
+        {connectors.map((connector) => (
+          <button
+            key={connector.uid}
+            onClick={() => connect({ connector })}
+            disabled={isConnecting}
+            className="w-48 rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+          >
+            {isConnecting ? "Connecting…" : `Connect ${connector.name}`}
+          </button>
+        ))}
       </div>
     );
   }
