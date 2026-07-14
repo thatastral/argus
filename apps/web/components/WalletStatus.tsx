@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatEther, parseEther } from "viem";
 import { useAccount, useBalance, useReadContract, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
+import { activeChain } from "@/lib/wagmi";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 export function WalletStatus() {
@@ -21,6 +22,7 @@ export function WalletStatus() {
     abi: abis.argusFactory,
     functionName: "walletOf",
     args: address ? [address] : undefined,
+    chainId: activeChain.id,
     query: { enabled: Boolean(address && addresses.argusFactory) },
   });
 
@@ -31,6 +33,7 @@ export function WalletStatus() {
 
   const { data: balance, refetch: refetchBalance } = useBalance({
     address: walletAddress,
+    chainId: activeChain.id,
     query: { enabled: Boolean(walletAddress) },
   });
 
@@ -39,6 +42,7 @@ export function WalletStatus() {
     abi: abis.habitManager,
     functionName: "isUnlockedToday",
     args: address ? [address] : undefined,
+    chainId: activeChain.id,
     query: { enabled: Boolean(address && addresses.habitManager) },
   });
 
@@ -52,6 +56,7 @@ export function WalletStatus() {
         abi: abis.accountabilityWallet,
         functionName: "deposit",
         value: parseEther(depositAmount),
+        chainId: activeChain.id,
       });
       setDepositAmount("");
       refetchBalance();
@@ -72,6 +77,7 @@ export function WalletStatus() {
         abi: abis.accountabilityWallet,
         functionName: "withdraw",
         args: [parseEther(withdrawAmount)],
+        chainId: activeChain.id,
       });
       setWithdrawAmount("");
       refetchBalance();

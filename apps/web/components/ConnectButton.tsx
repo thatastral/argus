@@ -1,15 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useAccount, useConnect, useDisconnect, useSignMessage } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSignMessage, useSwitchChain } from "wagmi";
+import { activeChain } from "@/lib/wagmi";
 
 export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => void }) {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
   const { connect, connectors, isPending: isConnecting } = useConnect();
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
+  const { switchChainAsync, isPending: isSwitchingChain } = useSwitchChain();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const onWrongChain = isConnected && chainId !== activeChain.id;
 
   async function signIn() {
     if (!address) return;
@@ -71,18 +75,34 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
       <p className="font-mono text-xs text-muted">
         {address?.slice(0, 6)}…{address?.slice(-4)}
       </p>
-      <div className="flex gap-2">
-        <button
-          onClick={signIn}
-          disabled={isSigningIn}
-          className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
-        >
-          {isSigningIn ? "Signing in…" : "Sign in with Wallet"}
-        </button>
-        <button onClick={() => disconnect()} className="rounded-md border border-border px-4 py-2 text-sm">
-          Disconnect
-        </button>
-      </div>
+
+      {onWrongChain ? (
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-xs text-muted">
+            Your wallet is on the wrong network — Argus runs on {activeChain.name}.
+          </p>
+          <button
+            onClick={() => switchChainAsync({ chainId: activeChain.id }).catch((err) => setError(err.message))}
+            disabled={isSwitchingChain}
+            className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+          >
+            {isSwitchingChain ? "Switching…" : `Switch to ${activeChain.name}`}
+          </button>
+        </div>
+      ) : (
+        <div className="flex gap-2">
+          <button
+            onClick={signIn}
+            disabled={isSigningIn}
+            className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+          >
+            {isSigningIn ? "Signing in…" : "Sign in with Wallet"}
+          </button>
+          <button onClick={() => disconnect()} className="rounded-md border border-border px-4 py-2 text-sm">
+            Disconnect
+          </button>
+        </div>
+      )}
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   );

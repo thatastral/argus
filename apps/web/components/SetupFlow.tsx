@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
+import { activeChain } from "@/lib/wagmi";
 
 const PENALTY_TYPES = ["save", "donate", "partner", "surprise"] as const;
 type PenaltyType = (typeof PENALTY_TYPES)[number];
@@ -55,6 +56,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         abi: abis.habitManager,
         functionName: "createHabit",
         args: [habitName],
+        chainId: activeChain.id,
       });
       await fetch("/api/habits", {
         method: "POST",
@@ -86,6 +88,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         abi: abis.penaltyEngine,
         functionName: "configurePenalty",
         args: [PENALTY_TYPE_INDEX[penaltyType], partner, amountWei],
+        chainId: activeChain.id,
       });
 
       await fetch("/api/penalty", {
@@ -117,6 +120,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         address: addresses.argusFactory!,
         abi: abis.argusFactory,
         functionName: "deployWallet",
+        chainId: activeChain.id,
       });
       console.log("deployWallet tx", deployHash);
 
