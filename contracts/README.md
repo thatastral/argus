@@ -12,8 +12,14 @@ Foundry project for Argus's on-chain layer on Monad.
 - **AccountabilityWallet** — one per user, deployed by ArgusFactory, **owned entirely by the
   user's own wallet address**. Argus never takes custody of funds or keys. Withdrawals check
   `HabitManager.isUnlockedToday()`; only PenaltyEngine may pull funds, and only on a missed day.
-- **ArgusFactory** — deploys each user's AccountabilityWallet and records `walletOf(user)` so
-  HabitManager/PenaltyEngine can find it.
+  Denominated in either native MON (`asset == address(0)`) or an ERC-20 like USDC, fixed per
+  vault at deploy time — `deposit()`/`depositERC20()` are separate paths and each reverts on
+  the wrong one for a given vault.
+- **ArgusFactory** — deploys each user's AccountabilityWallet (`deployWallet(asset)`) and
+  records `walletOf(user)` so HabitManager/PenaltyEngine can find it.
+- **MockUSDC** — testnet-only ERC-20 stand-in for USDC (6 decimals, open `mint()`). Deployed
+  alongside the others on testnet; **never deploy this on mainnet** — point the frontend at
+  real USDC's address there instead.
 
 This is 4 contracts, not the PRD's suggested 3 — the factory pattern (a fresh vault owned by
 the user, rather than one shared custodial contract) was an explicit non-custodial requirement
@@ -42,28 +48,32 @@ cp .env.example .env   # fill in PRIVATE_KEY (funded with testnet MON)
 forge test -vv
 ```
 
-## Deploy (testnet)
+## Deploy
 
 ```bash
 source .env
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url monad_testnet --broadcast \
-  --sig "run(address,address)" <VERIFIER_ADDRESS> <DONATION_ADDRESS>
+  --sig "run(address,address,bool)" <VERIFIER_ADDRESS> <DONATION_ADDRESS> <DEPLOY_MOCK_USDC>
 ```
 
 - `VERIFIER_ADDRESS` — the backend signer that will call `completeHabit()` after Gemini
   verifies a proof (`VERIFIER_PRIVATE_KEY` in `apps/web/.env.local`). Holds no user funds.
 - `DONATION_ADDRESS` — where "Donate" penalties are sent.
+- `DEPLOY_MOCK_USDC` — `true` on testnet (also deploys MockUSDC), **`false` on mainnet**
+  (`--rpc-url monad_mainnet`) — point `NEXT_PUBLIC_USDC_ADDRESS` at real USDC there instead.
 
-Copy the three logged addresses into `apps/web/.env.local` as `NEXT_PUBLIC_HABIT_MANAGER_ADDRESS`,
-`NEXT_PUBLIC_PENALTY_ENGINE_ADDRESS`, `NEXT_PUBLIC_ARGUS_FACTORY_ADDRESS`. Then from the repo
-root run `npm run sync-abi` to refresh `apps/web/lib/abi/*.json` from the compiled contracts.
+Copy the logged addresses into `apps/web/.env.local` as `NEXT_PUBLIC_HABIT_MANAGER_ADDRESS`,
+`NEXT_PUBLIC_PENALTY_ENGINE_ADDRESS`, `NEXT_PUBLIC_ARGUS_FACTORY_ADDRESS`, and (testnet only)
+`NEXT_PUBLIC_USDC_ADDRESS`. Then from the repo root run `npm run sync-abi` to refresh
+`apps/web/lib/abi/*.json` from the compiled contracts.
 
 ## Verify
 
 Use the monskills verification API (verifies on MonadVision, Socialscan, and Monadscan in one
-call) for each of the four deployed contracts — see the `scaffold` skill for the exact `curl`
-invocation, or fall back to `forge verify-contract --verifier sourcify` if the API is down.
+call) for each deployed contract (four, or five on testnet with MockUSDC) — see the `scaffold`
+skill for the exact `curl` invocation, or fall back to `forge verify-contract --verifier sourcify`
+if the API is down.
 
 ## Known simplifications (hackathon MVP — revisit before mainnet with real value at stake)
 
