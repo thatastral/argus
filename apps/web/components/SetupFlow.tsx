@@ -15,6 +15,7 @@ const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEng
 export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const { address, isConnected } = useAccount();
   const [displayName, setDisplayName] = useState("");
+  const [walletMode, setWalletMode] = useState<"easy" | "hard">("easy");
   const [habitName, setHabitName] = useState("");
   const [penaltyType, setPenaltyType] = useState<PenaltyType>("save");
   const [partnerAddress, setPartnerAddress] = useState("");
@@ -44,14 +45,15 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await fetch("/api/user", {
+      const res = await fetch("/api/user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName, walletMode: "easy" }),
+        body: JSON.stringify({ displayName, walletMode }),
       });
+      if (!res.ok) throw new Error("Could not save profile");
       setStep("habit");
-    } catch {
-      setError("Could not save profile");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save profile");
     } finally {
       setBusy(false);
     }
@@ -74,11 +76,12 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         chainId: activeChain.id,
       });
       if (cancelledRef.current) return;
-      await fetch("/api/habits", {
+      const mirrorRes = await fetch("/api/habits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contractIndex: 0, name: habitName }),
       });
+      if (!mirrorRes.ok) throw new Error("Habit created on-chain but failed to save — refresh and try again");
       console.log("createHabit tx", hash);
       setStep("penalty");
     } catch (err) {
@@ -109,7 +112,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       });
       if (cancelledRef.current) return;
 
-      await fetch("/api/penalty", {
+      const mirrorRes = await fetch("/api/penalty", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -118,7 +121,9 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           amountWei: amountWei.toString(),
         }),
       });
-      setStep("wallet");
+      if (!mirrorRes.ok) throw new Error("Penalty configured on-chain but failed to save — refresh and try again");
+      setStep(walletMode === "hard" ? "done" : "wallet");
+      if (walletMode === "hard") onComplete();
     } catch (err) {
       if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to configure penalty on-chain");
     } finally {
@@ -143,15 +148,6 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       });
       if (cancelledRef.current) return;
       console.log("deployWallet tx", deployHash);
-
-      // Wallet address is only known after the tx confirms and we can read walletOf().
-      // For the scaffold we just record that a deploy was attempted; the dashboard's
-      // on-chain read of ArgusFactory.walletOf(address) is the source of truth.
-      await fetch("/api/user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
 
       setStep("done");
       onComplete();
@@ -181,6 +177,40 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             placeholder="How should Argus greet you?"
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
+
+          <label className="block text-sm font-medium">Wallet mode</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setWalletMode("easy")}
+              className={`rounded-md border px-3 py-2 text-left text-sm ${
+                walletMode === "easy" ? "border-foreground bg-surface" : "border-border"
+              }`}
+            >
+              Easy Mode
+              <span className="mt-1 block text-xs font-normal text-muted">
+                Argus deploys a vault you own; deposit into it.
+              </span>
+            </button>
+            <button
+              onClick={() => setWalletMode("hard")}
+              className={`rounded-md border px-3 py-2 text-left text-sm ${
+                walletMode === "hard" ? "border-foreground bg-surface" : "border-border"
+              }`}
+            >
+              Hard Mode
+              <span className="mt-1 block text-xs font-normal text-muted">
+                Use your own wallet directly — no deposit needed.
+              </span>
+            </button>
+          </div>
+          {walletMode === "hard" && (
+            <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
+              Hard Mode&apos;s spend-blocking enforcement needs the Chrome Extension, which isn&apos;t built in this
+              scaffold yet. Your habits and streak will still track fully on-chain — penalties just won&apos;t move
+              funds until the extension exists.
+            </p>
+          )}
+
           <button
             onClick={saveProfile}
             disabled={busy || !displayName}
@@ -229,11 +259,16 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
               <button
                 key={type}
                 onClick={() => setPenaltyType(type)}
-                className={`rounded-md border px-3 py-2 text-sm capitalize ${
+                className={`relative rounded-md border px-3 py-2 text-sm capitalize ${
                   penaltyType === type ? "border-foreground bg-surface" : "border-border"
                 }`}
               >
                 {type}
+                {type === "surprise" && (
+                  <span className="mt-1 block w-fit rounded-full bg-border px-2 py-0.5 text-[10px] font-normal normal-case text-muted">
+                    picks one at random
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -298,6 +333,8 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           )}
         </div>
       )}
+
+      {step === "done" && <p className="text-center text-sm text-muted">All set — loading your dashboard…</p>}
 
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
