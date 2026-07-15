@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { useAccount, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useEffect, useRef, useState } from "react";
+import { useAccount, usePublicClient, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { WalletReconnect } from "./WalletReconnect";
@@ -28,6 +28,62 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const { writeContractAsync } = useWriteContract();
   const { data: _receipt } = useWaitForTransactionReceipt();
   void _receipt;
+  const publicClient = usePublicClient({ chainId: activeChain.id });
+
+  const [checkingExistingHabits, setCheckingExistingHabits] = useState(false);
+
+  // A habit can exist on-chain (createHabit succeeded) without ever making it into Supabase
+  // (the mirror POST failing — e.g. a stale session after a browser restart). Retrying
+  // "Create habit" in that state doesn't retry the save, it calls createHabit() again and
+  // silently creates a second on-chain habit — HabitManager has no dedupe. Repeat that enough
+  // times and MAX_HABITS reverts the next attempt with no on-chain trace of *why*. Before ever
+  // offering to create a habit, check whether one already exists on-chain and sync it instead.
+  useEffect(() => {
+    if (step !== "habit" || !contractsDeployed || !address || !publicClient) return;
+    let cancelled = false;
+
+    (async () => {
+      setCheckingExistingHabits(true);
+      try {
+        const count = (await publicClient.readContract({
+          address: addresses.habitManager!,
+          abi: abis.habitManager,
+          functionName: "habitCount",
+          args: [address],
+        })) as bigint;
+
+        if (count === 0n) return;
+
+        for (let i = 0; i < Number(count); i++) {
+          const [name, active] = (await publicClient.readContract({
+            address: addresses.habitManager!,
+            abi: abis.habitManager,
+            functionName: "habitsOf",
+            args: [address, BigInt(i)],
+          })) as [string, boolean];
+
+          if (!active) continue;
+
+          await fetch("/api/habits", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractIndex: i, name }),
+          });
+        }
+
+        if (!cancelled) setStep("penalty");
+      } catch {
+        // If the sync check itself fails, fall through to the normal create-habit form —
+        // worst case the user re-attempts and hits the same error, not a worse one.
+      } finally {
+        if (!cancelled) setCheckingExistingHabits(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [step, address, publicClient]);
 
   // Wallet requests (e.g. wallet_switchEthereumChain, eth_sendTransaction) have no
   // AbortController — a request that never gets a wallet response (extension conflicts,
@@ -65,10 +121,20 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet — see contracts/README.md, then set NEXT_PUBLIC_*_ADDRESS in .env.local");
       return;
     }
+    if (!publicClient || !address) return;
     cancelledRef.current = false;
     setBusy(true);
     setError(null);
     try {
+      // createHabit() always appends, so the new habit's index is whatever the count was
+      // right before this call — read it fresh rather than assuming this is always index 0.
+      const indexBefore = (await publicClient.readContract({
+        address: addresses.habitManager!,
+        abi: abis.habitManager,
+        functionName: "habitCount",
+        args: [address],
+      })) as bigint;
+
       const hash = await writeContractAsync({
         address: addresses.habitManager!,
         abi: abis.habitManager,
@@ -80,7 +146,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       const mirrorRes = await fetch("/api/habits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contractIndex: 0, name: habitName }),
+        body: JSON.stringify({ contractIndex: Number(indexBefore), name: habitName }),
       });
       if (!mirrorRes.ok) throw new Error("Habit created on-chain but failed to save — refresh and try again");
       console.log("createHabit tx", hash);
@@ -227,7 +293,11 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         </div>
       )}
 
-      {step === "habit" && (
+      {step === "habit" && checkingExistingHabits && (
+        <p className="text-center text-sm text-muted">Checking for existing habits…</p>
+      )}
+
+      {step === "habit" && !checkingExistingHabits && (
         <div className="space-y-3">
           <label className="block text-sm font-medium">Your first habit</label>
           <input
