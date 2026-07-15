@@ -12,7 +12,7 @@ contract ArgusFactory {
 
     mapping(address => address) public walletOf;
 
-    event WalletDeployed(address indexed user, address indexed wallet);
+    event WalletDeployed(address indexed user, address indexed wallet, address asset);
 
     error WalletAlreadyDeployed();
 
@@ -21,12 +21,14 @@ contract ArgusFactory {
         penaltyEngine = _penaltyEngine;
     }
 
-    function deployWallet() external returns (address wallet) {
+    /// @param asset address(0) for a native-MON vault, or an ERC-20 token address (e.g. USDC)
+    /// for a vault denominated in that token. Fixed for the lifetime of the deployed vault.
+    function deployWallet(address asset) external returns (address wallet) {
         if (walletOf[msg.sender] != address(0)) revert WalletAlreadyDeployed();
 
-        wallet = address(new AccountabilityWallet(msg.sender, habitManager, penaltyEngine));
+        wallet = address(new AccountabilityWallet(msg.sender, habitManager, penaltyEngine, asset));
         walletOf[msg.sender] = wallet;
 
-        emit WalletDeployed(msg.sender, wallet);
+        emit WalletDeployed(msg.sender, wallet, asset);
     }
 }

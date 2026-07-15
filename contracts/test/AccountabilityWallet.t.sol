@@ -9,20 +9,20 @@ contract AccountabilityWalletTest is ArgusTestBase {
     address internal user = makeAddr("user");
 
     function test_deployWallet_ownedByUser() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
         assertEq(wallet.owner(), user);
         assertEq(factory.walletOf(user), address(wallet));
     }
 
     function test_deployWallet_revertsOnSecondCall() public {
-        deployWalletFor(user);
+        deployWalletFor(user, address(0));
         vm.prank(user);
         vm.expectRevert(ArgusFactory.WalletAlreadyDeployed.selector);
-        factory.deployWallet();
+        factory.deployWallet(address(0));
     }
 
     function test_deposit_increasesBalance() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
 
         vm.deal(user, 1 ether);
         vm.prank(user);
@@ -32,7 +32,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
     }
 
     function test_withdraw_revertsWhenLocked() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
         vm.deal(user, 1 ether);
         vm.prank(user);
         wallet.deposit{value: 1 ether}();
@@ -47,7 +47,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
     }
 
     function test_withdraw_succeedsWhenUnlocked() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
         vm.deal(user, 1 ether);
         vm.prank(user);
         wallet.deposit{value: 1 ether}();
@@ -66,7 +66,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
     }
 
     function test_withdraw_revertsForNonOwner() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
         address stranger = makeAddr("stranger");
 
         vm.prank(stranger);
@@ -75,7 +75,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
     }
 
     function test_executePenalty_revertsWhenNotPenaltyEngine() public {
-        AccountabilityWallet wallet = deployWalletFor(user);
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
 
         vm.prank(user);
         vm.expectRevert(AccountabilityWallet.NotPenaltyEngine.selector);

@@ -9,6 +9,6 @@
   "scripts": {
     "dev": "npm run dev --workspace=apps/web",
     "build": "npm run build --workspace=apps/web",
-    "sync-abi": "cd contracts && forge build && for c in HabitManager PenaltyEngine ArgusFactory AccountabilityWallet; do forge inspect $c abi --json > ../apps/web/lib/abi/$c.json; done"
+    "sync-abi": "cd contracts && forge build && for c in HabitManager PenaltyEngine ArgusFactory AccountabilityWallet MockUSDC; do forge inspect $c abi --json > ../apps/web/lib/abi/$c.json; done"
   }
 }

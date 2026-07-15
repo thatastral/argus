@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { addresses, abis } from "@/lib/contracts";
+import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { WalletReconnect } from "./WalletReconnect";
 
@@ -16,6 +16,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const { address, isConnected } = useAccount();
   const [displayName, setDisplayName] = useState("");
   const [walletMode, setWalletMode] = useState<"easy" | "hard">("easy");
+  const [vaultAsset, setVaultAsset] = useState<"mon" | "usdc">("mon");
   const [habitName, setHabitName] = useState("");
   const [penaltyType, setPenaltyType] = useState<PenaltyType>("save");
   const [partnerAddress, setPartnerAddress] = useState("");
@@ -136,6 +137,10 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet");
       return;
     }
+    if (vaultAsset === "usdc" && !addresses.usdc) {
+      setError("NEXT_PUBLIC_USDC_ADDRESS is not configured");
+      return;
+    }
     cancelledRef.current = false;
     setBusy(true);
     setError(null);
@@ -144,6 +149,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         address: addresses.argusFactory!,
         abi: abis.argusFactory,
         functionName: "deployWallet",
+        args: [vaultAsset === "usdc" ? addresses.usdc! : NATIVE_ASSET],
         chainId: activeChain.id,
       });
       if (cancelledRef.current) return;
@@ -313,6 +319,34 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           <p className="text-xs text-muted">
             This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
           </p>
+
+          <label className="block text-sm font-medium">Stake in</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => setVaultAsset("mon")}
+              className={`rounded-md border px-3 py-2 text-sm ${
+                vaultAsset === "mon" ? "border-foreground bg-surface" : "border-border"
+              }`}
+            >
+              MON
+            </button>
+            <button
+              onClick={() => setVaultAsset("usdc")}
+              disabled={!addresses.usdc}
+              className={`rounded-md border px-3 py-2 text-sm disabled:opacity-40 ${
+                vaultAsset === "usdc" ? "border-foreground bg-surface" : "border-border"
+              }`}
+            >
+              USDC
+            </button>
+          </div>
+          {vaultAsset === "usdc" && (
+            <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
+              Testnet USDC is a mintable test token — you&apos;ll be able to mint yourself some from the dashboard
+              after deploying.
+            </p>
+          )}
+
           {isConnected ? (
             <>
               <button

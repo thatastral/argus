@@ -6,6 +6,7 @@ import {HabitManager} from "../../src/HabitManager.sol";
 import {PenaltyEngine} from "../../src/PenaltyEngine.sol";
 import {ArgusFactory} from "../../src/ArgusFactory.sol";
 import {AccountabilityWallet} from "../../src/AccountabilityWallet.sol";
+import {MockUSDC} from "../../src/MockUSDC.sol";
 
 /// @dev Wires the same PenaltyEngine -> HabitManager -> ArgusFactory bootstrap sequence used
 /// by script/Deploy.s.sol, so tests exercise the exact deployment topology production uses.
@@ -17,6 +18,7 @@ abstract contract ArgusTestBase is Test {
     HabitManager internal habitManager;
     PenaltyEngine internal penaltyEngine;
     ArgusFactory internal factory;
+    MockUSDC internal usdc;
 
     function setUp() public virtual {
         vm.startPrank(deployer);
@@ -30,12 +32,14 @@ abstract contract ArgusTestBase is Test {
         penaltyEngine.setFactory(address(factory));
 
         habitManager.setVerifier(verifier);
+        usdc = new MockUSDC();
 
         vm.stopPrank();
     }
 
-    function deployWalletFor(address user) internal returns (AccountabilityWallet wallet) {
+    /// @param asset address(0) for a native-MON vault, or an ERC-20 address (e.g. `usdc`).
+    function deployWalletFor(address user, address asset) internal returns (AccountabilityWallet wallet) {
         vm.prank(user);
-        wallet = AccountabilityWallet(payable(factory.deployWallet()));
+        wallet = AccountabilityWallet(payable(factory.deployWallet(asset)));
     }
 }

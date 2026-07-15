@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { formatEther, parseEther } from "viem";
+import { formatEther, formatUnits, parseEther, parseUnits } from "viem";
 import { useAccount, useBalance, useReadContract, useWriteContract } from "wagmi";
-import { addresses, abis } from "@/lib/contracts";
+import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WalletReconnect } from "./WalletReconnect";
@@ -32,10 +32,47 @@ export function WalletStatus() {
       ? (accountabilityWallet as `0x${string}`)
       : undefined;
 
-  const { data: balance, refetch: refetchBalance } = useBalance({
+  const { data: assetAddress } = useReadContract({
     address: walletAddress,
+    abi: abis.accountabilityWallet,
+    functionName: "asset",
     chainId: activeChain.id,
     query: { enabled: Boolean(walletAddress) },
+  });
+
+  const isNative = assetAddress === NATIVE_ASSET;
+  const isMockUsdc = Boolean(assetAddress && addresses.usdc && assetAddress === addresses.usdc);
+
+  const { data: nativeBalance, refetch: refetchNativeBalance } = useBalance({
+    address: walletAddress,
+    chainId: activeChain.id,
+    query: { enabled: Boolean(walletAddress) && isNative },
+  });
+
+  const { data: erc20Balance, refetch: refetchErc20Balance } = useReadContract({
+    address: assetAddress as `0x${string}` | undefined,
+    abi: abis.erc20,
+    functionName: "balanceOf",
+    args: walletAddress ? [walletAddress] : undefined,
+    chainId: activeChain.id,
+    query: { enabled: Boolean(walletAddress && assetAddress) && !isNative },
+  });
+
+  const { data: decimals } = useReadContract({
+    address: assetAddress as `0x${string}` | undefined,
+    abi: abis.erc20,
+    functionName: "decimals",
+    chainId: activeChain.id,
+    query: { enabled: Boolean(assetAddress) && !isNative },
+  });
+
+  const { data: allowance, refetch: refetchAllowance } = useReadContract({
+    address: assetAddress as `0x${string}` | undefined,
+    abi: abis.erc20,
+    functionName: "allowance",
+    args: address && walletAddress ? [address, walletAddress] : undefined,
+    chainId: activeChain.id,
+    query: { enabled: Boolean(address && walletAddress && assetAddress) && !isNative },
   });
 
   const { data: isUnlocked, refetch: refetchUnlocked } = useReadContract({
@@ -47,18 +84,56 @@ export function WalletStatus() {
     query: { enabled: Boolean(address && addresses.habitManager) },
   });
 
+  function refetchBalance() {
+    if (isNative) refetchNativeBalance();
+    else refetchErc20Balance();
+  }
+
+  const assetDecimals = isNative ? 18 : (decimals as number | undefined) ?? 6;
+  const assetSymbol = isNative ? "MON" : "USDC";
+  const displayBalance = isNative
+    ? nativeBalance
+      ? formatEther(nativeBalance.value)
+      : "0"
+    : erc20Balance !== undefined
+      ? formatUnits(erc20Balance as bigint, assetDecimals)
+      : "0";
+
   async function deposit() {
     if (!walletAddress || !depositAmount) return;
     setBusy(true);
     setError(null);
     try {
-      await writeContractAsync({
-        address: walletAddress,
-        abi: abis.accountabilityWallet,
-        functionName: "deposit",
-        value: parseEther(depositAmount),
-        chainId: activeChain.id,
-      });
+      const amount = isNative ? parseEther(depositAmount) : parseUnits(depositAmount, assetDecimals);
+
+      if (isNative) {
+        await writeContractAsync({
+          address: walletAddress,
+          abi: abis.accountabilityWallet,
+          functionName: "deposit",
+          value: amount,
+          chainId: activeChain.id,
+        });
+      } else {
+        if (!allowance || (allowance as bigint) < amount) {
+          await writeContractAsync({
+            address: assetAddress as `0x${string}`,
+            abi: abis.erc20,
+            functionName: "approve",
+            args: [walletAddress, amount],
+            chainId: activeChain.id,
+          });
+          await refetchAllowance();
+        }
+        await writeContractAsync({
+          address: walletAddress,
+          abi: abis.accountabilityWallet,
+          functionName: "depositERC20",
+          args: [amount],
+          chainId: activeChain.id,
+        });
+      }
+
       setDepositAmount("");
       refetchBalance();
     } catch (err) {
@@ -73,11 +148,12 @@ export function WalletStatus() {
     setBusy(true);
     setError(null);
     try {
+      const amount = isNative ? parseEther(withdrawAmount) : parseUnits(withdrawAmount, assetDecimals);
       await writeContractAsync({
         address: walletAddress,
         abi: abis.accountabilityWallet,
         functionName: "withdraw",
-        args: [parseEther(withdrawAmount)],
+        args: [amount],
         chainId: activeChain.id,
       });
       setWithdrawAmount("");
@@ -90,6 +166,27 @@ export function WalletStatus() {
     }
   }
 
+  const [minting, setMinting] = useState(false);
+  async function mintTestUsdc() {
+    if (!address || !assetAddress) return;
+    setMinting(true);
+    setError(null);
+    try {
+      await writeContractAsync({
+        address: assetAddress as `0x${string}`,
+        abi: abis.erc20,
+        functionName: "mint",
+        args: [address, parseUnits("100", 6)],
+        chainId: activeChain.id,
+      });
+      refetchBalance();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Mint failed");
+    } finally {
+      setMinting(false);
+    }
+  }
+
   if (!walletAddress) {
     return <p className="text-sm text-muted">No Accountability Wallet deployed yet.</p>;
   }
@@ -99,7 +196,9 @@ export function WalletStatus() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-muted">Wallet balance</p>
-          <p className="text-2xl font-medium">{balance ? formatEther(balance.value) : "0"} MON</p>
+          <p className="text-2xl font-medium">
+            {displayBalance} {assetSymbol}
+          </p>
         </div>
         <span
           className={`rounded-full px-2 py-1 text-xs ${
@@ -112,11 +211,21 @@ export function WalletStatus() {
 
       {isConnected ? (
         <>
+          {isMockUsdc && (
+            <button
+              onClick={mintTestUsdc}
+              disabled={minting}
+              className="w-full rounded-md border border-border px-3 py-2 text-xs text-muted disabled:opacity-50"
+            >
+              {minting ? "Minting…" : "Mint 100 test USDC to my wallet"}
+            </button>
+          )}
+
           <div className="flex gap-2">
             <input
               value={depositAmount}
               onChange={(e) => setDepositAmount(e.target.value)}
-              placeholder="Amount (MON)"
+              placeholder={`Amount (${assetSymbol})`}
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <button
@@ -132,7 +241,7 @@ export function WalletStatus() {
             <input
               value={withdrawAmount}
               onChange={(e) => setWithdrawAmount(e.target.value)}
-              placeholder="Amount (MON)"
+              placeholder={`Amount (${assetSymbol})`}
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <button
@@ -153,7 +262,7 @@ export function WalletStatus() {
       <ConfirmDialog
         open={confirmingWithdraw}
         title="Confirm withdrawal"
-        description={`Withdraw ${withdrawAmount} MON to your wallet?`}
+        description={`Withdraw ${withdrawAmount} ${assetSymbol} to your wallet?`}
         confirmLabel="Withdraw"
         pending={busy}
         onConfirm={withdraw}

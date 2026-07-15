@@ -13,7 +13,7 @@ contract PenaltyEngineTest is ArgusTestBase {
         internal
         returns (AccountabilityWallet wallet)
     {
-        wallet = deployWalletFor(user);
+        wallet = deployWalletFor(user, address(0));
         vm.deal(user, 1 ether);
         vm.prank(user);
         wallet.deposit{value: 1 ether}();
