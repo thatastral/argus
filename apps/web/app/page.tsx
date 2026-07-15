@@ -5,7 +5,9 @@ import { ConnectButton } from "@/components/ConnectButton";
 import { SetupFlow } from "@/components/SetupFlow";
 import { HabitList } from "@/components/HabitList";
 import { WalletStatus } from "@/components/WalletStatus";
-import { ChatPanel } from "@/components/ChatPanel";
+import { ChatHero } from "@/components/ChatHero";
+import { BottomSheet } from "@/components/BottomSheet";
+import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 
 interface StateResponse {
   wallet: string;
@@ -15,9 +17,17 @@ interface StateResponse {
   todaysCompletions: { contract_index: number; verified: boolean }[];
 }
 
+function timeGreeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
 export default function Home() {
   const [sessionWallet, setSessionWallet] = useState<string | null | undefined>(undefined);
   const [state, setState] = useState<StateResponse | null>(null);
+  const [openSheet, setOpenSheet] = useState<"habits" | "wallet" | null>(null);
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/state");
@@ -42,6 +52,8 @@ export default function Home() {
       cancelled = true;
     };
   }, [sessionWallet]);
+
+  const { balanceFormatted, symbol, isUnlocked } = useAccountabilityWallet();
 
   if (sessionWallet === undefined) {
     return null;
@@ -71,31 +83,54 @@ export default function Home() {
   const completedIndexes = state.todaysCompletions.filter((c) => c.verified).map((c) => c.contract_index);
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-8 md:flex-row">
-      <section className="flex-1 space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold">
-            {state.user?.display_name ? `Welcome back, ${state.user.display_name}` : "Welcome back"}
-          </h1>
-          {state.streak && (
-            <p className="text-sm text-muted">
-              🔥 {state.streak.current_streak} day streak · best {state.streak.longest_streak} ·{" "}
-              {(state.streak.completion_rate_bps / 100).toFixed(0)}% completion
-            </p>
-          )}
-        </div>
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-10 px-4 py-12">
+      <div className="text-center">
+        <p className="text-6xl font-semibold tabular-nums">
+          {Number(balanceFormatted).toFixed(2)} <span className="text-3xl text-muted">{symbol}</span>
+        </p>
+        <p className="mt-2 font-mono text-xs uppercase tracking-wide text-muted">
+          {isUnlocked ? "unlocked" : "locked"}
+          {state.streak && ` · streak ${state.streak.current_streak}d`}
+        </p>
+      </div>
 
+      <div className="text-center">
+        <h1 className="text-xl font-medium">
+          {timeGreeting()}
+          {state.user?.display_name ? `, ${state.user.display_name}` : ""}
+        </h1>
+        {state.streak && (
+          <p className="mt-1 font-mono text-xs uppercase tracking-wide text-muted">
+            best streak {state.streak.longest_streak}d · {(state.streak.completion_rate_bps / 100).toFixed(0)}%
+            completion
+          </p>
+        )}
+      </div>
+
+      <ChatHero />
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setOpenSheet("habits")}
+          className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
+        >
+          Habits
+        </button>
+        <button
+          onClick={() => setOpenSheet("wallet")}
+          className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
+        >
+          Wallet
+        </button>
+      </div>
+
+      <BottomSheet open={openSheet === "habits"} title="Today's habits" onClose={() => setOpenSheet(null)}>
+        <HabitList habits={state.habits} completedIndexes={completedIndexes} onVerified={loadState} />
+      </BottomSheet>
+
+      <BottomSheet open={openSheet === "wallet"} title="Wallet" onClose={() => setOpenSheet(null)}>
         <WalletStatus />
-
-        <div>
-          <h2 className="mb-2 text-sm font-medium text-muted">Today&apos;s habits</h2>
-          <HabitList habits={state.habits} completedIndexes={completedIndexes} onVerified={loadState} />
-        </div>
-      </section>
-
-      <section className="h-[32rem] w-full md:w-96">
-        <ChatPanel />
-      </section>
+      </BottomSheet>
     </main>
   );
 }
