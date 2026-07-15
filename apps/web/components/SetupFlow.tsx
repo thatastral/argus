@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
@@ -26,6 +26,19 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const { data: _receipt } = useWaitForTransactionReceipt();
   void _receipt;
 
+  // Wallet requests (e.g. wallet_switchEthereumChain, eth_sendTransaction) have no
+  // AbortController — a request that never gets a wallet response (extension conflicts,
+  // a popup opening off-screen, etc.) leaves the UI stuck on "Confirm in wallet…" forever
+  // with no way out. This lets the user give up locally and try again; if the original
+  // wallet request eventually does resolve, cancelledRef stops it from acting on stale state.
+  const cancelledRef = useRef(false);
+
+  function cancel() {
+    cancelledRef.current = true;
+    setBusy(false);
+    setError("Cancelled — check your wallet extension for a stuck request, then try again.");
+  }
+
   async function saveProfile() {
     setBusy(true);
     setError(null);
@@ -48,6 +61,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet — see contracts/README.md, then set NEXT_PUBLIC_*_ADDRESS in .env.local");
       return;
     }
+    cancelledRef.current = false;
     setBusy(true);
     setError(null);
     try {
@@ -58,6 +72,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         args: [habitName],
         chainId: activeChain.id,
       });
+      if (cancelledRef.current) return;
       await fetch("/api/habits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -66,9 +81,9 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       console.log("createHabit tx", hash);
       setStep("penalty");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create habit on-chain");
+      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to create habit on-chain");
     } finally {
-      setBusy(false);
+      if (!cancelledRef.current) setBusy(false);
     }
   }
 
@@ -77,6 +92,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet");
       return;
     }
+    cancelledRef.current = false;
     setBusy(true);
     setError(null);
     try {
@@ -90,6 +106,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         args: [PENALTY_TYPE_INDEX[penaltyType], partner, amountWei],
         chainId: activeChain.id,
       });
+      if (cancelledRef.current) return;
 
       await fetch("/api/penalty", {
         method: "POST",
@@ -102,9 +119,9 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       });
       setStep("wallet");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to configure penalty on-chain");
+      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to configure penalty on-chain");
     } finally {
-      setBusy(false);
+      if (!cancelledRef.current) setBusy(false);
     }
   }
 
@@ -113,6 +130,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet");
       return;
     }
+    cancelledRef.current = false;
     setBusy(true);
     setError(null);
     try {
@@ -122,6 +140,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         functionName: "deployWallet",
         chainId: activeChain.id,
       });
+      if (cancelledRef.current) return;
       console.log("deployWallet tx", deployHash);
 
       // Wallet address is only known after the tx confirms and we can read walletOf().
@@ -136,9 +155,9 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setStep("done");
       onComplete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to deploy Accountability Wallet");
+      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to deploy Accountability Wallet");
     } finally {
-      setBusy(false);
+      if (!cancelledRef.current) setBusy(false);
     }
   }
 
@@ -187,6 +206,11 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           >
             {busy ? "Confirm in wallet…" : "Create habit"}
           </button>
+          {busy && (
+            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+              Stuck? Cancel and try again
+            </button>
+          )}
         </div>
       )}
 
@@ -227,6 +251,11 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           >
             {busy ? "Confirm in wallet…" : "Continue"}
           </button>
+          {busy && (
+            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+              Stuck? Cancel and try again
+            </button>
+          )}
         </div>
       )}
 
@@ -243,6 +272,11 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           >
             {busy ? "Confirm in wallet…" : "Deploy wallet"}
           </button>
+          {busy && (
+            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+              Stuck? Cancel and try again
+            </button>
+          )}
         </div>
       )}
 
