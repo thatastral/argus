@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionWallet } from "@/lib/session";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 
 const bodySchema = z.object({
   displayName: z.string().min(1).max(64).optional(),
@@ -33,10 +33,15 @@ export async function POST(request: Request) {
   }
 
   const supabase = supabaseAdmin();
-  const { error } = await supabase.from("users").update(update).eq("wallet_address", wallet);
+  if (!(await ensureUser(supabase, wallet))) {
+    return NextResponse.json({ error: "Failed to ensure user record" }, { status: 500 });
+  }
 
-  if (error) {
-    return NextResponse.json({ error: "Failed to update user" }, { status: 500 });
+  if (Object.keys(update).length > 0) {
+    const { error } = await supabase.from("users").update(update).eq("wallet_address", wallet);
+    if (error) {
+      return NextResponse.json({ error: "Failed to update user" }, { status: 500 });
+    }
   }
 
   return NextResponse.json({ ok: true });

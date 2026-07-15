@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionWallet } from "@/lib/session";
-import { supabaseAdmin } from "@/lib/supabase/server";
+import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 
 const bodySchema = z.object({
   penaltyType: z.enum(["save", "donate", "partner", "surprise"]),
@@ -25,6 +25,10 @@ export async function POST(request: Request) {
   }
 
   const supabase = supabaseAdmin();
+  if (!(await ensureUser(supabase, wallet))) {
+    return NextResponse.json({ error: "Failed to ensure user record" }, { status: 500 });
+  }
+
   const { error } = await supabase.from("penalty_configs").upsert({
     wallet_address: wallet,
     penalty_type: parsed.data.penaltyType,
