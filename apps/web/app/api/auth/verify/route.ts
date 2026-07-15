@@ -72,11 +72,18 @@ export async function POST(request: Request) {
   const isNewUser = !existingUser;
 
   if (isNewUser) {
-    await supabase.from("users").insert({
+    const { error: insertError } = await supabase.from("users").insert({
       wallet_address: address,
       display_name: `${address.slice(0, 6)}...${address.slice(-4)}`,
       wallet_mode: "easy",
     });
+    // Every other table (habits, penalty_configs, ...) has a foreign key to users — issuing
+    // a session for a user row that doesn't actually exist would let the client past this
+    // point only to fail with an opaque FK violation on the next write. Fail loudly here
+    // instead, where the cause is obvious.
+    if (insertError) {
+      return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
+    }
   }
 
   await createSession(address);
