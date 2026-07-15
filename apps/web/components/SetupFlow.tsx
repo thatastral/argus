@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useAccount, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
+import { WalletReconnect } from "./WalletReconnect";
 
 const PENALTY_TYPES = ["save", "donate", "partner", "surprise"] as const;
 type PenaltyType = (typeof PENALTY_TYPES)[number];
@@ -12,7 +13,7 @@ const PENALTY_TYPE_INDEX: Record<PenaltyType, number> = { save: 0, donate: 1, pa
 const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEngine && addresses.argusFactory);
 
 export function SetupFlow({ onComplete }: { onComplete: () => void }) {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const [displayName, setDisplayName] = useState("");
   const [habitName, setHabitName] = useState("");
   const [penaltyType, setPenaltyType] = useState<PenaltyType>("save");
@@ -199,17 +200,23 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             placeholder="e.g. Code, Gym, Read"
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
-          <button
-            onClick={createHabit}
-            disabled={busy || !habitName}
-            className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-          >
-            {busy ? "Confirm in wallet…" : "Create habit"}
-          </button>
-          {busy && (
-            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-              Stuck? Cancel and try again
-            </button>
+          {isConnected ? (
+            <>
+              <button
+                onClick={createHabit}
+                disabled={busy || !habitName}
+                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+              >
+                {busy ? "Confirm in wallet…" : "Create habit"}
+              </button>
+              {busy && (
+                <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+                  Stuck? Cancel and try again
+                </button>
+              )}
+            </>
+          ) : (
+            <WalletReconnect />
           )}
         </div>
       )}
@@ -244,17 +251,23 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             onChange={(e) => setAmountMon(e.target.value)}
             className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
-          <button
-            onClick={configurePenalty}
-            disabled={busy || (penaltyType === "partner" && !partnerAddress)}
-            className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-          >
-            {busy ? "Confirm in wallet…" : "Continue"}
-          </button>
-          {busy && (
-            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-              Stuck? Cancel and try again
-            </button>
+          {isConnected ? (
+            <>
+              <button
+                onClick={configurePenalty}
+                disabled={busy || (penaltyType === "partner" && !partnerAddress)}
+                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+              >
+                {busy ? "Confirm in wallet…" : "Continue"}
+              </button>
+              {busy && (
+                <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+                  Stuck? Cancel and try again
+                </button>
+              )}
+            </>
+          ) : (
+            <WalletReconnect />
           )}
         </div>
       )}
@@ -265,17 +278,23 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           <p className="text-xs text-muted">
             This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
           </p>
-          <button
-            onClick={deployAndDeposit}
-            disabled={busy}
-            className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-          >
-            {busy ? "Confirm in wallet…" : "Deploy wallet"}
-          </button>
-          {busy && (
-            <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-              Stuck? Cancel and try again
-            </button>
+          {isConnected ? (
+            <>
+              <button
+                onClick={deployAndDeposit}
+                disabled={busy}
+                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+              >
+                {busy ? "Confirm in wallet…" : "Deploy wallet"}
+              </button>
+              {busy && (
+                <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+                  Stuck? Cancel and try again
+                </button>
+              )}
+            </>
+          ) : (
+            <WalletReconnect />
           )}
         </div>
       )}

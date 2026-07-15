@@ -6,9 +6,10 @@ import { useAccount, useBalance, useReadContract, useWriteContract } from "wagmi
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { WalletReconnect } from "./WalletReconnect";
 
 export function WalletStatus() {
-  const { address } = useAccount();
+  const { address, isConnected } = useAccount();
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
@@ -109,37 +110,43 @@ export function WalletStatus() {
         </span>
       </div>
 
-      <div className="flex gap-2">
-        <input
-          value={depositAmount}
-          onChange={(e) => setDepositAmount(e.target.value)}
-          placeholder="Amount (MON)"
-          className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-        />
-        <button
-          onClick={deposit}
-          disabled={busy || !depositAmount}
-          className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
-        >
-          Deposit
-        </button>
-      </div>
+      {isConnected ? (
+        <>
+          <div className="flex gap-2">
+            <input
+              value={depositAmount}
+              onChange={(e) => setDepositAmount(e.target.value)}
+              placeholder="Amount (MON)"
+              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+            <button
+              onClick={deposit}
+              disabled={busy || !depositAmount}
+              className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
+            >
+              Deposit
+            </button>
+          </div>
 
-      <div className="flex gap-2">
-        <input
-          value={withdrawAmount}
-          onChange={(e) => setWithdrawAmount(e.target.value)}
-          placeholder="Amount (MON)"
-          className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-        />
-        <button
-          onClick={() => setConfirmingWithdraw(true)}
-          disabled={busy || !withdrawAmount || !isUnlocked}
-          className="rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-        >
-          Withdraw
-        </button>
-      </div>
+          <div className="flex gap-2">
+            <input
+              value={withdrawAmount}
+              onChange={(e) => setWithdrawAmount(e.target.value)}
+              placeholder="Amount (MON)"
+              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+            <button
+              onClick={() => setConfirmingWithdraw(true)}
+              disabled={busy || !withdrawAmount || !isUnlocked}
+              className="rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+            >
+              Withdraw
+            </button>
+          </div>
+        </>
+      ) : (
+        <WalletReconnect />
+      )}
 
       {error && <p className="text-xs text-red-500">{error}</p>}
 
