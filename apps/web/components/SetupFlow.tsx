@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { parseUnits } from "viem";
 import { useAccount, usePublicClient, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
@@ -9,6 +10,9 @@ import { WalletReconnect } from "./WalletReconnect";
 const PENALTY_TYPES = ["save", "donate", "partner", "surprise"] as const;
 type PenaltyType = (typeof PENALTY_TYPES)[number];
 const PENALTY_TYPE_INDEX: Record<PenaltyType, number> = { save: 0, donate: 1, partner: 2, surprise: 3 };
+
+const STEPS = ["profile", "habit", "penalty", "wallet", "done"] as const;
+type Step = (typeof STEPS)[number];
 
 const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEngine && addresses.argusFactory);
 
@@ -20,8 +24,8 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const [habitName, setHabitName] = useState("");
   const [penaltyType, setPenaltyType] = useState<PenaltyType>("save");
   const [partnerAddress, setPartnerAddress] = useState("");
-  const [amountMon, setAmountMon] = useState("0.01");
-  const [step, setStep] = useState<"profile" | "habit" | "penalty" | "wallet" | "done">("profile");
+  const [stakeAmount, setStakeAmount] = useState("0.01");
+  const [step, setStep] = useState<Step>("profile");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,14 +34,22 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   void _receipt;
   const publicClient = usePublicClient({ chainId: activeChain.id });
 
+  function back() {
+    const i = STEPS.indexOf(step);
+    if (i > 0) {
+      setError(null);
+      setStep(STEPS[i - 1]);
+    }
+  }
+
   const [checkingExistingHabits, setCheckingExistingHabits] = useState(false);
 
   // A habit can exist on-chain (createHabit succeeded) without ever making it into Supabase
-  // (the mirror POST failing — e.g. a stale session after a browser restart). Retrying
-  // "Create habit" in that state doesn't retry the save, it calls createHabit() again and
-  // silently creates a second on-chain habit — HabitManager has no dedupe. Repeat that enough
-  // times and MAX_HABITS reverts the next attempt with no on-chain trace of *why*. Before ever
-  // offering to create a habit, check whether one already exists on-chain and sync it instead.
+  // (the mirror POST failing — e.g. a stale session). Retrying "Create habit" in that state
+  // doesn't retry the save, it calls createHabit() again and silently creates a second
+  // on-chain habit slot — HabitManager has no dedupe. Before ever offering to create a habit,
+  // check whether one already exists on-chain and sync it instead. Habit names live in
+  // Supabase only (not on-chain), so a slot with no mirrored name gets a placeholder.
   useEffect(() => {
     if (step !== "habit" || !contractsDeployed || !address || !publicClient) return;
     let cancelled = false;
@@ -54,20 +66,26 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
 
         if (count === 0n) return;
 
+        const existingRes = await fetch("/api/habits");
+        const existing: { contract_index: number }[] = existingRes.ok ? (await existingRes.json()).habits : [];
+        const mirroredIndexes = new Set(existing.map((h) => h.contract_index));
+
         for (let i = 0; i < Number(count); i++) {
-          const [name, active] = (await publicClient.readContract({
+          if (mirroredIndexes.has(i)) continue;
+
+          const active = (await publicClient.readContract({
             address: addresses.habitManager!,
             abi: abis.habitManager,
-            functionName: "habitsOf",
+            functionName: "habitActive",
             args: [address, BigInt(i)],
-          })) as [string, boolean];
+          })) as boolean;
 
           if (!active) continue;
 
           await fetch("/api/habits", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contractIndex: i, name }),
+            body: JSON.stringify({ contractIndex: i, name: `Habit ${i + 1}` }),
           });
         }
 
@@ -139,7 +157,6 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         address: addresses.habitManager!,
         abi: abis.habitManager,
         functionName: "createHabit",
-        args: [habitName],
         chainId: activeChain.id,
       });
       if (cancelledRef.current) return;
@@ -163,11 +180,16 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setError("Contracts not deployed yet");
       return;
     }
+    if (vaultAsset === "usdc" && !addresses.usdc) {
+      setError("NEXT_PUBLIC_USDC_ADDRESS is not configured");
+      return;
+    }
     cancelledRef.current = false;
     setBusy(true);
     setError(null);
     try {
-      const amountWei = BigInt(Math.round(Number(amountMon) * 1e18));
+      const decimals = vaultAsset === "usdc" ? 6 : 18;
+      const amountWei = parseUnits(stakeAmount || "0", decimals);
       const partner = penaltyType === "partner" ? (partnerAddress as `0x${string}`) : "0x0000000000000000000000000000000000000000";
 
       await writeContractAsync({
@@ -230,8 +252,16 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     }
   }
 
+  const showBack = step !== "profile" && step !== "done";
+
   return (
     <div className="mx-auto w-full max-w-sm space-y-4">
+      {showBack && (
+        <button onClick={back} className="text-xs text-muted underline">
+          ← Back
+        </button>
+      )}
+
       {!contractsDeployed && (
         <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
           Contracts aren&apos;t deployed yet. Run <code>forge script script/Deploy.s.sol</code> in{" "}
@@ -356,12 +386,37 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
               className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
             />
           )}
-          <label className="block text-sm font-medium">Amount at stake per missed day (MON)</label>
-          <input
-            value={amountMon}
-            onChange={(e) => setAmountMon(e.target.value)}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          />
+
+          <label className="block text-sm font-medium">Amount at stake per missed day</label>
+          <div className="flex gap-2">
+            <input
+              value={stakeAmount}
+              onChange={(e) => setStakeAmount(e.target.value)}
+              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+            <div className="flex rounded-md border border-border p-0.5">
+              <button
+                onClick={() => setVaultAsset("mon")}
+                className={`rounded px-3 py-1.5 text-xs ${vaultAsset === "mon" ? "bg-surface text-foreground" : "text-muted"}`}
+              >
+                MON
+              </button>
+              <button
+                onClick={() => setVaultAsset("usdc")}
+                disabled={!addresses.usdc}
+                className={`rounded px-3 py-1.5 text-xs disabled:opacity-40 ${
+                  vaultAsset === "usdc" ? "bg-surface text-foreground" : "text-muted"
+                }`}
+              >
+                USDC
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-muted">
+            This also decides what your Accountability Wallet holds — {vaultAsset === "usdc" ? "USDC" : "MON"} in
+            the next step.
+          </p>
+
           {isConnected ? (
             <>
               <button
@@ -387,35 +442,9 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         <div className="space-y-3">
           <label className="block text-sm font-medium">Deploy your Accountability Wallet</label>
           <p className="text-xs text-muted">
-            This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
+            This deploys a {vaultAsset === "usdc" ? "USDC" : "MON"} vault owned entirely by your wallet address.
+            Argus never holds your funds.
           </p>
-
-          <label className="block text-sm font-medium">Stake in</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setVaultAsset("mon")}
-              className={`rounded-md border px-3 py-2 text-sm ${
-                vaultAsset === "mon" ? "border-foreground bg-surface" : "border-border"
-              }`}
-            >
-              MON
-            </button>
-            <button
-              onClick={() => setVaultAsset("usdc")}
-              disabled={!addresses.usdc}
-              className={`rounded-md border px-3 py-2 text-sm disabled:opacity-40 ${
-                vaultAsset === "usdc" ? "border-foreground bg-surface" : "border-border"
-              }`}
-            >
-              USDC
-            </button>
-          </div>
-          {vaultAsset === "usdc" && (
-            <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
-              Testnet USDC is a mintable test token — you&apos;ll be able to mint yourself some from the dashboard
-              after deploying.
-            </p>
-          )}
 
           {isConnected ? (
             <>

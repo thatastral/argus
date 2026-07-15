@@ -4,9 +4,13 @@ Foundry project for Argus's on-chain layer on Monad.
 
 ## Contracts
 
-- **HabitManager** — habits (max 3/user), daily completion, streaks, unlock eligibility,
+- **HabitManager** — habit slots (max 3/user), daily completion, streaks, unlock eligibility,
   and `settle()` (permissionless keeper call that closes out a day and triggers a penalty
-  on failure).
+  on failure). Deliberately does **not** store habit names — a label is display metadata with
+  no need for trustless enforcement, so it lives in Supabase only. On-chain tracks just an
+  active/inactive slot per index and whether it's been verified complete on a given day; that's
+  the part that actually needs to be tamper-proof (see `packages/supabase`'s schema comment for
+  the fuller on-chain-vs-off-chain rationale).
 - **PenaltyEngine** — user-configured consequence (Save / Donate / Accountability Partner /
   Surprise), executed by HabitManager on a missed day.
 - **AccountabilityWallet** — one per user, deployed by ArgusFactory, **owned entirely by the

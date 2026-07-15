@@ -4,22 +4,23 @@ pragma solidity 0.8.28;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IPenaltyEngineExecute} from "./interfaces/IPenaltyEngineExecute.sol";
 
-/// @notice Tracks each user's habits, daily proof-of-completion, discipline streak, and
+/// @notice Tracks each user's habit slots, daily proof-of-completion, discipline streak, and
 /// unlock eligibility for their AccountabilityWallet. `verifier` is the backend signer that
 /// relays Gemini's structured verification result on-chain — AI itself never touches the chain.
+///
+/// Habit *names* deliberately do not live here — a label is display metadata with no need for
+/// trustless enforcement (see Supabase's `habits` table). This contract only tracks the one
+/// thing that actually needs to be tamper-proof: whether a given slot is active and whether
+/// it's been verified complete on a given day.
 contract HabitManager is Ownable {
     uint256 public constant MAX_HABITS = 3;
-
-    struct Habit {
-        string name;
-        bool active;
-    }
 
     address public immutable penaltyEngine;
     address public verifier;
     address public factory;
 
-    mapping(address => Habit[]) public habitsOf;
+    mapping(address => uint256) public habitCountOf;
+    mapping(address => mapping(uint256 => bool)) public habitActive;
     // user => day => habitIndex => completed
     mapping(address => mapping(uint256 => mapping(uint256 => bool))) public completedOn;
 
@@ -32,7 +33,7 @@ contract HabitManager is Ownable {
     mapping(address => uint256) public startDay;
     mapping(address => uint256) public nextSettleDay;
 
-    event HabitCreated(address indexed user, uint256 indexed index, string name);
+    event HabitCreated(address indexed user, uint256 indexed index);
     event HabitActiveSet(address indexed user, uint256 indexed index, bool active);
     event HabitCompleted(address indexed user, uint256 indexed index, uint256 day);
     event DaySettled(address indexed user, uint256 indexed day, bool success, uint256 newStreak);
@@ -72,36 +73,35 @@ contract HabitManager is Ownable {
         emit FactorySet(_factory);
     }
 
-    function createHabit(string calldata name) external {
-        Habit[] storage habits = habitsOf[msg.sender];
-        if (habits.length >= MAX_HABITS) revert TooManyHabits();
+    function createHabit() external {
+        uint256 count = habitCountOf[msg.sender];
+        if (count >= MAX_HABITS) revert TooManyHabits();
 
-        habits.push(Habit({name: name, active: true}));
+        habitActive[msg.sender][count] = true;
+        habitCountOf[msg.sender] = count + 1;
 
-        if (habits.length == 1) {
+        if (count == 0) {
             uint256 today = _today();
             startDay[msg.sender] = today;
             nextSettleDay[msg.sender] = today; // today itself is not owed until tomorrow
         }
 
-        emit HabitCreated(msg.sender, habits.length - 1, name);
+        emit HabitCreated(msg.sender, count);
     }
 
     function setHabitActive(uint256 index, bool active) external {
-        Habit[] storage habits = habitsOf[msg.sender];
-        if (index >= habits.length) revert InvalidHabitIndex();
-        habits[index].active = active;
+        if (index >= habitCountOf[msg.sender]) revert InvalidHabitIndex();
+        habitActive[msg.sender][index] = active;
         emit HabitActiveSet(msg.sender, index, active);
     }
 
     function habitCount(address user) external view returns (uint256) {
-        return habitsOf[user].length;
+        return habitCountOf[user];
     }
 
     /// @notice Called by the backend verifier after Gemini returns verified:true for today's proof.
     function completeHabit(address user, uint256 index) external onlyVerifier {
-        Habit[] storage habits = habitsOf[user];
-        if (index >= habits.length) revert InvalidHabitIndex();
+        if (index >= habitCountOf[user]) revert InvalidHabitIndex();
 
         uint256 today = _today();
         completedOn[user][today][index] = true;
@@ -117,8 +117,7 @@ contract HabitManager is Ownable {
     /// @notice Permissionless keeper function — settles the oldest un-settled day for `user`.
     /// Call repeatedly to catch up if multiple days were missed without anyone calling settle.
     function settle(address user) external {
-        Habit[] storage habits = habitsOf[user];
-        if (habits.length == 0) revert NoHabitsYet();
+        if (habitCountOf[user] == 0) revert NoHabitsYet();
 
         uint256 day = nextSettleDay[user];
         if (day >= _today()) revert NothingToSettle();
@@ -150,13 +149,12 @@ contract HabitManager is Ownable {
     }
 
     function _allActiveCompletedOn(address user, uint256 day) internal view returns (bool) {
-        Habit[] storage habits = habitsOf[user];
-        uint256 len = habits.length;
+        uint256 len = habitCountOf[user];
         if (len == 0) return false;
 
         bool hasActive = false;
         for (uint256 i = 0; i < len; i++) {
-            if (!habits[i].active) continue;
+            if (!habitActive[user][i]) continue;
             hasActive = true;
             if (!completedOn[user][day][i]) return false;
         }

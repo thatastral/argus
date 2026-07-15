@@ -22,7 +22,7 @@ contract PenaltyEngineTest is ArgusTestBase {
         penaltyEngine.configurePenalty(penaltyType, partnerAddr, amount);
 
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         // never completed -> day fails
 
         vm.warp(block.timestamp + 1 days);

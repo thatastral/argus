@@ -51,7 +51,7 @@ contract AccountabilityWalletERC20Test is ArgusTestBase {
         _depositUsdc(wallet, 100e6);
 
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         vm.prank(verifier);
         habitManager.completeHabit(user, 0);
 
@@ -70,7 +70,7 @@ contract AccountabilityWalletERC20Test is ArgusTestBase {
         penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate, address(0), 25e6);
 
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         // never completed -> day fails
 
         vm.warp(block.timestamp + 1 days);

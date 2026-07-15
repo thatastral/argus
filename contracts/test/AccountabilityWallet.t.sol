@@ -38,7 +38,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
         wallet.deposit{value: 1 ether}();
 
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         // not completed today -> locked
 
         vm.prank(user);
@@ -53,7 +53,7 @@ contract AccountabilityWalletTest is ArgusTestBase {
         wallet.deposit{value: 1 ether}();
 
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         vm.prank(verifier);
         habitManager.completeHabit(user, 0);
 

@@ -9,7 +9,7 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_createHabit_setsActiveAndUnlockStartsFalse() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
 
         assertEq(habitManager.habitCount(user), 1);
         assertFalse(habitManager.isUnlockedToday(user));
@@ -17,17 +17,17 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_createHabit_revertsAfterMax() public {
         vm.startPrank(user);
-        habitManager.createHabit("Code");
-        habitManager.createHabit("Gym");
-        habitManager.createHabit("Read");
+        habitManager.createHabit();
+        habitManager.createHabit();
+        habitManager.createHabit();
         vm.expectRevert(HabitManager.TooManyHabits.selector);
-        habitManager.createHabit("Pray");
+        habitManager.createHabit();
         vm.stopPrank();
     }
 
     function test_completeHabit_onlyVerifier() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
 
         vm.prank(user);
         vm.expectRevert(HabitManager.NotVerifier.selector);
@@ -36,8 +36,8 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_isUnlockedToday_trueOnceAllActiveCompleted() public {
         vm.startPrank(user);
-        habitManager.createHabit("Code");
-        habitManager.createHabit("Gym");
+        habitManager.createHabit();
+        habitManager.createHabit();
         vm.stopPrank();
 
         vm.prank(verifier);
@@ -51,7 +51,7 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_settle_successIncrementsStreak() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
 
         vm.prank(verifier);
         habitManager.completeHabit(user, 0);
@@ -66,7 +66,7 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_settle_failureResetsStreakAndTriggersPenalty() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
         // habit never completed today
 
         vm.warp(block.timestamp + 1 days);
@@ -79,7 +79,7 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_settle_revertsIfNothingOwedYet() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
 
         vm.expectRevert(HabitManager.NothingToSettle.selector);
         habitManager.settle(user);
@@ -87,7 +87,7 @@ contract HabitManagerTest is ArgusTestBase {
 
     function test_completionRateBps() public {
         vm.prank(user);
-        habitManager.createHabit("Code");
+        habitManager.createHabit();
 
         vm.prank(verifier);
         habitManager.completeHabit(user, 0);
