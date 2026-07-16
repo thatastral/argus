@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { parseUnits } from "viem";
 import { useAccount, usePublicClient, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
-import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
+import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
+import { PENALTY_TYPES, PENALTY_TYPE_INDEX, type PenaltyType } from "@/lib/penalty";
 import { WalletReconnect } from "./WalletReconnect";
+import { DeployWalletForm } from "./DeployWalletForm";
 
-const PENALTY_TYPES = ["save", "donate", "partner", "surprise"] as const;
-type PenaltyType = (typeof PENALTY_TYPES)[number];
-const PENALTY_TYPE_INDEX: Record<PenaltyType, number> = { save: 0, donate: 1, partner: 2, surprise: 3 };
+const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 
 const STEPS = ["profile", "habit", "penalty", "wallet", "done"] as const;
 type Step = (typeof STEPS)[number];
@@ -220,37 +220,6 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     }
   }
 
-  async function deployAndDeposit() {
-    if (!contractsDeployed || !address) {
-      setError("Contracts not deployed yet");
-      return;
-    }
-    if (vaultAsset === "usdc" && !addresses.usdc) {
-      setError("NEXT_PUBLIC_USDC_ADDRESS is not configured");
-      return;
-    }
-    cancelledRef.current = false;
-    setBusy(true);
-    setError(null);
-    try {
-      const deployHash = await writeContractAsync({
-        address: addresses.argusFactory!,
-        abi: abis.argusFactory,
-        functionName: "deployWallet",
-        args: [vaultAsset === "usdc" ? addresses.usdc! : NATIVE_ASSET],
-        chainId: activeChain.id,
-      });
-      if (cancelledRef.current) return;
-      console.log("deployWallet tx", deployHash);
-
-      setStep("done");
-      onComplete();
-    } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to deploy Accountability Wallet");
-    } finally {
-      if (!cancelledRef.current) setBusy(false);
-    }
-  }
 
   const showBack = step !== "profile" && step !== "done";
 
@@ -379,12 +348,17 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             ))}
           </div>
           {penaltyType === "partner" && (
-            <input
-              value={partnerAddress}
-              onChange={(e) => setPartnerAddress(e.target.value)}
-              placeholder="Partner's wallet address (0x…)"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
-            />
+            <>
+              <input
+                value={partnerAddress}
+                onChange={(e) => setPartnerAddress(e.target.value)}
+                placeholder="Partner's wallet address (0x…)"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+              />
+              {partnerAddress && !ADDRESS_PATTERN.test(partnerAddress) && (
+                <p className="text-xs text-red-500">Not a valid address — expected 0x followed by 40 hex characters.</p>
+              )}
+            </>
           )}
 
           <label className="block text-sm font-medium">Amount at stake per missed day</label>
@@ -392,6 +366,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             <input
               value={stakeAmount}
               onChange={(e) => setStakeAmount(e.target.value)}
+              inputMode="decimal"
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <div className="flex rounded-md border border-border p-0.5">
@@ -416,12 +391,22 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             This also decides what your Accountability Wallet holds — {vaultAsset === "usdc" ? "USDC" : "MON"} in
             the next step.
           </p>
+          {penaltyType !== "save" && (!stakeAmount || Number(stakeAmount) === 0) && (
+            <p className="text-xs text-amber-500">
+              With nothing staked, missing a day won&apos;t actually have a consequence.
+            </p>
+          )}
 
           {isConnected ? (
             <>
               <button
                 onClick={configurePenalty}
-                disabled={busy || (penaltyType === "partner" && !partnerAddress)}
+                disabled={
+                  busy ||
+                  (penaltyType === "partner" && !ADDRESS_PATTERN.test(partnerAddress)) ||
+                  !stakeAmount ||
+                  Number.isNaN(Number(stakeAmount))
+                }
                 className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
               >
                 {busy ? "Confirm in wallet…" : "Continue"}
@@ -442,28 +427,15 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         <div className="space-y-3">
           <label className="block text-sm font-medium">Deploy your Accountability Wallet</label>
           <p className="text-xs text-muted">
-            This deploys a {vaultAsset === "usdc" ? "USDC" : "MON"} vault owned entirely by your wallet address.
-            Argus never holds your funds.
+            This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
           </p>
-
-          {isConnected ? (
-            <>
-              <button
-                onClick={deployAndDeposit}
-                disabled={busy}
-                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-              >
-                {busy ? "Confirm in wallet…" : "Deploy wallet"}
-              </button>
-              {busy && (
-                <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-                  Stuck? Cancel and try again
-                </button>
-              )}
-            </>
-          ) : (
-            <WalletReconnect />
-          )}
+          <DeployWalletForm
+            defaultAsset={vaultAsset}
+            onDeployed={() => {
+              setStep("done");
+              onComplete();
+            }}
+          />
         </div>
       )}
 

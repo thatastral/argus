@@ -8,10 +8,11 @@ import { activeChain } from "@/lib/wagmi";
 import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WalletReconnect } from "./WalletReconnect";
+import { DeployWalletForm } from "./DeployWalletForm";
 
 /// Deposit/withdraw controls — rendered inside the Wallet bottom sheet. The balance number
 /// itself lives in the home screen hero (useAccountabilityWallet is the shared source for both).
-export function WalletStatus() {
+export function WalletStatus({ walletMode }: { walletMode: string | undefined }) {
   const { address, isConnected } = useAccount();
   const {
     walletAddress,
@@ -24,12 +25,14 @@ export function WalletStatus() {
     isUnlocked,
     refetchBalance,
     refetchUnlocked,
+    refetchWalletAddress,
   } = useAccountabilityWallet();
 
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
   const [confirmingWithdraw, setConfirmingWithdraw] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [activeAction, setActiveAction] = useState<"deposit" | "withdraw" | null>(null);
+  const busy = activeAction !== null;
   const [minting, setMinting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,7 +49,7 @@ export function WalletStatus() {
 
   async function deposit() {
     if (!walletAddress || !depositAmount) return;
-    setBusy(true);
+    setActiveAction("deposit");
     setError(null);
     try {
       const amount = isNative ? parseEther(depositAmount) : parseUnits(depositAmount, assetDecimals);
@@ -84,13 +87,13 @@ export function WalletStatus() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deposit failed");
     } finally {
-      setBusy(false);
+      setActiveAction(null);
     }
   }
 
   async function withdraw() {
     if (!walletAddress || !withdrawAmount) return;
-    setBusy(true);
+    setActiveAction("withdraw");
     setError(null);
     try {
       const amount = isNative ? parseEther(withdrawAmount) : parseUnits(withdrawAmount, assetDecimals);
@@ -106,7 +109,7 @@ export function WalletStatus() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Withdraw failed — wallet may still be locked");
     } finally {
-      setBusy(false);
+      setActiveAction(null);
       setConfirmingWithdraw(false);
     }
   }
@@ -132,7 +135,25 @@ export function WalletStatus() {
   }
 
   if (!walletAddress) {
-    return <p className="text-sm text-muted">No Accountability Wallet deployed yet.</p>;
+    // Hard Mode never deploys a vault (spending stays in the user's own wallet) — this is
+    // permanent, not a pending state, so the message shouldn't read like something's broken.
+    if (walletMode === "hard") {
+      return (
+        <p className="text-sm text-muted">
+          Hard Mode doesn&apos;t use an Accountability Wallet — spending happens directly from your own wallet once
+          the Chrome Extension unlocks it.
+        </p>
+      );
+    }
+    // Easy Mode with no vault yet: reachable if setup was left mid-way (e.g. a habit was
+    // created but the wallet-deploy step never finished) — previously a dead end with no way
+    // back in from the dashboard. Let them finish right here instead.
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-muted">You haven&apos;t deployed an Accountability Wallet yet.</p>
+        <DeployWalletForm onDeployed={refetchWalletAddress} />
+      </div>
+    );
   }
 
   return (
@@ -167,14 +188,15 @@ export function WalletStatus() {
               value={depositAmount}
               onChange={(e) => setDepositAmount(e.target.value)}
               placeholder={`Amount (${symbol})`}
+              inputMode="decimal"
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <button
               onClick={deposit}
-              disabled={busy || !depositAmount}
+              disabled={busy || !depositAmount || Number.isNaN(Number(depositAmount))}
               className="rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
             >
-              Deposit
+              {activeAction === "deposit" ? "Depositing…" : "Deposit"}
             </button>
           </div>
 
@@ -183,14 +205,15 @@ export function WalletStatus() {
               value={withdrawAmount}
               onChange={(e) => setWithdrawAmount(e.target.value)}
               placeholder={`Amount (${symbol})`}
+              inputMode="decimal"
               className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
             <button
               onClick={() => setConfirmingWithdraw(true)}
-              disabled={busy || !withdrawAmount || !isUnlocked}
+              disabled={busy || !withdrawAmount || Number.isNaN(Number(withdrawAmount)) || !isUnlocked}
               className="rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
             >
-              Withdraw
+              {activeAction === "withdraw" ? "Withdrawing…" : "Withdraw"}
             </button>
           </div>
         </>

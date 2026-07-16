@@ -11,7 +11,7 @@ import { activeChain } from "@/lib/wagmi";
 export function useAccountabilityWallet() {
   const { address } = useAccount();
 
-  const { data: rawWalletAddress } = useReadContract({
+  const { data: rawWalletAddress, refetch: refetchWalletAddress } = useReadContract({
     address: addresses.argusFactory,
     abi: abis.argusFactory,
     functionName: "walletOf",
@@ -94,5 +94,6 @@ export function useAccountabilityWallet() {
     isUnlocked: Boolean(isUnlocked),
     refetchBalance,
     refetchUnlocked,
+    refetchWalletAddress,
   };
 }

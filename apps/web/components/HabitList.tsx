@@ -14,6 +14,8 @@ interface VerifyResult {
   reason: string;
 }
 
+const MAX_PROOF_FILE_BYTES = 8 * 1024 * 1024; // 8MB — base64 inflates ~33%, keep well under typical body limits
+
 function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -42,6 +44,10 @@ function HabitRow({
   const [error, setError] = useState<string | null>(null);
 
   async function handleFile(file: File) {
+    if (file.size > MAX_PROOF_FILE_BYTES) {
+      setError("That image is too large — try one under 8MB.");
+      return;
+    }
     setUploading(true);
     setError(null);
     setResult(null);
