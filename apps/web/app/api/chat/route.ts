@@ -29,7 +29,8 @@ export async function POST(request: Request) {
       ).maybeSingle(),
       supabase.from("habits").select("contract_index, name, active").eq("wallet_address", wallet),
       supabase.from("streak_cache").select("*").eq("wallet_address", wallet).maybeSingle(),
-      supabase.from("penalty_configs").select("penalty_type, amount_wei").eq("wallet_address", wallet).maybeSingle(),
+      // amount_wei cast to text — see /api/state/route.ts for why (JSON-number precision loss).
+      supabase.from("penalty_configs").select("penalty_type, amount_wei::text").eq("wallet_address", wallet).maybeSingle(),
       supabase
         .from("daily_settlements")
         .select("day, success, resolved_penalty_type")
@@ -47,7 +48,16 @@ export async function POST(request: Request) {
     recentSettlements: recentSettlements ?? [],
   });
 
-  const reply = await progressCoachReply({ userMessage: parsed.data.message, contextJson });
+  let reply: string;
+  try {
+    reply = await progressCoachReply({ userMessage: parsed.data.message, contextJson });
+  } catch (err) {
+    console.error("progressCoachReply failed", err);
+    reply =
+      err instanceof Error && err.message.includes("GEMINI_API_KEY")
+        ? "The AI coach isn't configured yet — ask whoever runs this app to set GEMINI_API_KEY."
+        : "I couldn't reach the AI service just now — try again shortly.";
+  }
 
   await supabase.from("chat_messages").insert([
     { wallet_address: wallet, role: "user", content: parsed.data.message },

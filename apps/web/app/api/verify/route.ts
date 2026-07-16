@@ -55,7 +55,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to store proof image" }, { status: 500 });
   }
 
-  const result = await verifyHabitProof({ habitName: habit.name, imageBase64, mimeType });
+  let result: Awaited<ReturnType<typeof verifyHabitProof>>;
+  try {
+    result = await verifyHabitProof({ habitName: habit.name, imageBase64, mimeType });
+  } catch (err) {
+    // The image is already uploaded — don't leave it orphaned with no record. Write a
+    // not-verified completion row explaining why, so the UI has something coherent to show
+    // instead of a bare request failure, and the user knows to retry rather than assume
+    // their proof was silently ignored.
+    console.error("verifyHabitProof failed", err);
+    result = {
+      verified: false,
+      confidence: 0,
+      reason:
+        err instanceof Error && err.message.includes("GEMINI_API_KEY")
+          ? "AI verification isn't configured yet — ask whoever runs this app to set GEMINI_API_KEY."
+          : "Verification service is unavailable right now — try again shortly.",
+    };
+  }
 
   let onchainTxHash: string | null = null;
 

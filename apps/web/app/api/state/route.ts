@@ -29,7 +29,16 @@ export async function GET() {
         .eq("wallet_address", wallet)
         .order("contract_index", { ascending: true }),
       supabase.from("streak_cache").select("*").eq("wallet_address", wallet).maybeSingle(),
-      supabase.from("penalty_configs").select("*").eq("wallet_address", wallet).maybeSingle(),
+      // amount_wei is numeric(78,0) — cast to text so PostgREST sends it as a JSON string.
+      // As a bare JSON number it round-trips through JSON.parse as a JS `number` (IEEE 754
+      // double), which loses precision above 2^53 (~9e15) — well within range for wei amounts
+      // (confirmed: a generic large integer does NOT survive JSON.parse exactly, only some
+      // values happen to by coincidence). SettingsSheet does BigInt(amount_wei) on this value.
+      supabase
+        .from("penalty_configs")
+        .select("wallet_address, penalty_type, partner_address, amount_wei::text, updated_at")
+        .eq("wallet_address", wallet)
+        .maybeSingle(),
       supabase
         .from("habit_completions")
         .select("contract_index, verified, confidence")
