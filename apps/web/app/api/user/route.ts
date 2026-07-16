@@ -5,15 +5,14 @@ import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 
 const bodySchema = z.object({
   displayName: z.string().min(1).max(64).optional(),
-  walletMode: z.enum(["easy", "hard"]).optional(),
   accountabilityWalletAddress: z
     .string()
     .regex(/^0x[a-fA-F0-9]{40}$/)
     .optional(),
 });
 
-/// Mirrors setup-flow choices that don't belong on-chain (display name, wallet mode) plus
-/// the AccountabilityWallet address once the client has deployed it via ArgusFactory.
+/// Mirrors setup-flow choices that don't belong on-chain (display name) plus the
+/// AccountabilityWallet address once the client has deployed it via ArgusFactory.
 export async function POST(request: Request) {
   const wallet = await getSessionWallet();
   if (!wallet) {
@@ -27,7 +26,6 @@ export async function POST(request: Request) {
 
   const update: Record<string, string> = {};
   if (parsed.data.displayName) update.display_name = parsed.data.displayName;
-  if (parsed.data.walletMode) update.wallet_mode = parsed.data.walletMode;
   if (parsed.data.accountabilityWalletAddress) {
     update.accountability_wallet_address = parsed.data.accountabilityWalletAddress.toLowerCase();
   }

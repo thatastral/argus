@@ -75,7 +75,6 @@ export async function POST(request: Request) {
     const { error: insertError } = await supabase.from("users").insert({
       wallet_address: address,
       display_name: `${address.slice(0, 6)}...${address.slice(-4)}`,
-      wallet_mode: "easy",
     });
     // Every other table (habits, penalty_configs, ...) has a foreign key to users — issuing
     // a session for a user row that doesn't actually exist would let the client past this

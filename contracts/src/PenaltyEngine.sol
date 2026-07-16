@@ -6,31 +6,36 @@ import {IArgusFactory} from "./interfaces/IArgusFactory.sol";
 import {IAccountabilityWallet} from "./interfaces/IAccountabilityWallet.sol";
 
 /// @notice Executes the user-chosen consequence when HabitManager settles a missed day.
-/// Save = funds simply stay locked (no transfer). Donate/Partner move `penaltyAmount` out of
-/// the user's AccountabilityWallet. Surprise resolves to one of the other three at settlement time.
+/// SavingsVault moves the wallet's currently-committed amount into its own locked
+/// savings-vault bucket (see AccountabilityWallet.moveToSavingsVault) — still the user's
+/// funds, just locked for SAVINGS_VAULT_LOCK_PERIOD. Donate transfers the committed amount
+/// out to donationAddress immediately. `amount` is always read fresh from the wallet's own
+/// committedAmount() view (not stored here) so it's automatically clamped to whatever the
+/// vault can actually cover — see AccountabilityWallet.sol's doc comment on why committed is
+/// a live view rather than mutable state kept in sync by hand.
 contract PenaltyEngine is Ownable {
     enum PenaltyType {
-        Save,
-        Donate,
-        Partner,
-        Surprise
+        SavingsVault,
+        Donate
     }
+
+    /// @dev Not specified by product doc — 7 days chosen as a sensible MVP default, easy to
+    /// change before a real deploy.
+    uint256 public constant SAVINGS_VAULT_LOCK_PERIOD = 7 days;
 
     address public habitManager;
     address public factory;
     address public donationAddress;
 
     mapping(address => PenaltyType) public penaltyTypeOf;
-    mapping(address => address) public partnerOf;
     mapping(address => uint256) public penaltyAmountOf;
 
-    event PenaltyConfigured(address indexed user, PenaltyType penaltyType, address partner, uint256 amount);
+    event PenaltyConfigured(address indexed user, PenaltyType penaltyType, uint256 amount);
     event PenaltyExecuted(address indexed user, PenaltyType resolvedType, address recipient, uint256 amount);
     event PenaltySkipped(address indexed user, string reason);
 
     error AlreadySet();
     error NotHabitManager();
-    error InvalidPartner();
     error ZeroAddress();
 
     modifier onlyHabitManager() {
@@ -62,57 +67,37 @@ contract PenaltyEngine is Ownable {
         donationAddress = _donationAddress;
     }
 
-    /// @notice Users configure their own consequence and the MON amount at stake per missed day.
-    function configurePenalty(PenaltyType penaltyType, address partner, uint256 amount) external {
-        if (penaltyType == PenaltyType.Partner && partner == address(0)) revert InvalidPartner();
-
+    /// @notice Users configure their own consequence and the amount at stake per missed day.
+    function configurePenalty(PenaltyType penaltyType, uint256 amount) external {
         penaltyTypeOf[msg.sender] = penaltyType;
-        partnerOf[msg.sender] = partner;
         penaltyAmountOf[msg.sender] = amount;
 
-        emit PenaltyConfigured(msg.sender, penaltyType, partner, amount);
+        emit PenaltyConfigured(msg.sender, penaltyType, amount);
     }
 
     /// @notice Called by HabitManager exactly once per missed day during settlement.
     function execute(address user) external onlyHabitManager {
-        uint256 amount = penaltyAmountOf[user];
-        if (amount == 0) {
-            emit PenaltySkipped(user, "no penalty amount configured");
-            return;
-        }
-
         address wallet = IArgusFactory(factory).walletOf(user);
         if (wallet == address(0)) {
             emit PenaltySkipped(user, "no accountability wallet deployed");
             return;
         }
 
-        PenaltyType resolved = _resolve(user);
-
-        if (resolved == PenaltyType.Save) {
-            emit PenaltyExecuted(user, resolved, address(0), 0);
+        uint256 amount = IAccountabilityWallet(wallet).committedAmount();
+        if (amount == 0) {
+            emit PenaltySkipped(user, "no committed amount");
             return;
         }
 
-        address recipient = resolved == PenaltyType.Donate ? donationAddress : partnerOf[user];
-        if (recipient == address(0)) {
-            emit PenaltySkipped(user, "no recipient configured");
+        PenaltyType penaltyType = penaltyTypeOf[user];
+
+        if (penaltyType == PenaltyType.SavingsVault) {
+            IAccountabilityWallet(wallet).moveToSavingsVault(amount);
+            emit PenaltyExecuted(user, penaltyType, address(0), amount);
             return;
         }
 
-        IAccountabilityWallet(wallet).executePenalty(amount, payable(recipient));
-        emit PenaltyExecuted(user, resolved, recipient, amount);
-    }
-
-    /// @dev Surprise resolves pseudo-randomly at settlement time. block.prevrandao-based
-    /// randomness is manipulable by block producers within a narrow window — acceptable for
-    /// a hackathon MVP where the stakes are small self-imposed penalties, not fine for
-    /// anything adversarial. Swap for a VRF before mainnet if amounts get meaningful.
-    function _resolve(address user) internal view returns (PenaltyType) {
-        PenaltyType configured = penaltyTypeOf[user];
-        if (configured != PenaltyType.Surprise) return configured;
-
-        uint256 rand = uint256(keccak256(abi.encode(block.prevrandao, block.timestamp, user))) % 3;
-        return PenaltyType(rand);
+        IAccountabilityWallet(wallet).executePenalty(amount, payable(donationAddress));
+        emit PenaltyExecuted(user, penaltyType, donationAddress, amount);
     }
 }

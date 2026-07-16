@@ -11,7 +11,7 @@ export async function GET() {
   const supabase = supabaseAdmin();
   const { data: user } = await supabase
     .from("users")
-    .select("display_name, wallet_mode, accountability_wallet_address")
+    .select("display_name, accountability_wallet_address")
     .eq("wallet_address", wallet)
     .maybeSingle();
 

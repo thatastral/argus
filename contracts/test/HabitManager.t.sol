@@ -25,6 +25,23 @@ contract HabitManagerTest is ArgusTestBase {
         vm.stopPrank();
     }
 
+    function test_createHabit_deactivatingFreesASlot() public {
+        vm.startPrank(user);
+        habitManager.createHabit();
+        habitManager.createHabit();
+        habitManager.createHabit();
+        vm.expectRevert(HabitManager.TooManyHabits.selector);
+        habitManager.createHabit();
+
+        habitManager.setHabitActive(1, false);
+        habitManager.createHabit(); // now 3 active again (0, 2, 3) — should succeed
+        assertEq(habitManager.habitCount(user), 4);
+
+        vm.expectRevert(HabitManager.TooManyHabits.selector);
+        habitManager.createHabit(); // 3 active again, no room
+        vm.stopPrank();
+    }
+
     function test_completeHabit_onlyVerifier() public {
         vm.prank(user);
         habitManager.createHabit();

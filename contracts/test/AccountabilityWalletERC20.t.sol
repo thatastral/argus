@@ -67,7 +67,7 @@ contract AccountabilityWalletERC20Test is ArgusTestBase {
         _depositUsdc(wallet, 100e6);
 
         vm.prank(user);
-        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate, address(0), 25e6);
+        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate, 25e6);
 
         vm.prank(user);
         habitManager.createHabit();

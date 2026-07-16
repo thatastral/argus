@@ -6,10 +6,22 @@ import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 const bodySchema = z.object({
   contractIndex: z.number().int().min(0).max(2),
   name: z.string().min(1).max(64),
+  // Off-chain-only, informational (see CLAUDE.md/migration 0002) — omit entirely to leave an
+  // existing value untouched (used by the rename path, useRenameHabit.ts), pass null for "no
+  // end date", or a positive day count.
+  targetDays: z.number().int().positive().nullable().optional(),
+  // Off-chain-only, informational (migration 0004) — "HH:MM" 24-hour, same omit/null semantics
+  // as targetDays above.
+  deadlineTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .optional(),
 });
 
 /// Called right after the client's own HabitManager.createHabit() tx confirms, so the
-/// off-chain mirror's contract_index always matches the on-chain array index.
+/// off-chain mirror's contract_index always matches the on-chain array index. Also reused
+/// as-is for renaming (same upsert, same contractIndex, new name) — see useRenameHabit.ts.
 export async function POST(request: Request) {
   const wallet = await getSessionWallet();
   if (!wallet) {
@@ -26,15 +38,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to ensure user record" }, { status: 500 });
   }
 
-  const { error } = await supabase.from("habits").upsert(
-    {
-      wallet_address: wallet,
-      contract_index: parsed.data.contractIndex,
-      name: parsed.data.name,
-      active: true,
-    },
-    { onConflict: "wallet_address,contract_index" },
-  );
+  const payload: Record<string, unknown> = {
+    wallet_address: wallet,
+    contract_index: parsed.data.contractIndex,
+    name: parsed.data.name,
+    active: true,
+  };
+  if (parsed.data.targetDays !== undefined) {
+    payload.target_days = parsed.data.targetDays;
+  }
+  if (parsed.data.deadlineTime !== undefined) {
+    payload.deadline_time = parsed.data.deadlineTime;
+  }
+
+  const { error } = await supabase.from("habits").upsert(payload, { onConflict: "wallet_address,contract_index" });
 
   if (error) {
     return NextResponse.json({ error: "Failed to save habit" }, { status: 500 });
@@ -52,7 +69,7 @@ export async function GET() {
   const supabase = supabaseAdmin();
   const { data, error } = await supabase
     .from("habits")
-    .select("contract_index, name, active")
+    .select("contract_index, name, active, target_days, deadline_time, created_at")
     .eq("wallet_address", wallet)
     .order("contract_index", { ascending: true });
 
@@ -61,4 +78,36 @@ export async function GET() {
   }
 
   return NextResponse.json({ habits: data });
+}
+
+const patchSchema = z.object({
+  contractIndex: z.number().int().min(0).max(2),
+});
+
+/// Mirrors HabitManager.setHabitActive(index, false) after the on-chain tx confirms — see
+/// hooks/useDeleteHabit.ts. A plain update (not upsert) so this can never touch `name`, unlike
+/// the POST handler above which intentionally always sets active:true.
+export async function PATCH(request: Request) {
+  const wallet = await getSessionWallet();
+  if (!wallet) {
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  }
+
+  const parsed = patchSchema.safeParse(await request.json());
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+  }
+
+  const supabase = supabaseAdmin();
+  const { error } = await supabase
+    .from("habits")
+    .update({ active: false })
+    .eq("wallet_address", wallet)
+    .eq("contract_index", parsed.data.contractIndex);
+
+  if (error) {
+    return NextResponse.json({ error: "Failed to remove habit" }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
 }

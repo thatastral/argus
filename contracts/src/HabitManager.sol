@@ -73,20 +73,26 @@ contract HabitManager is Ownable {
         emit FactorySet(_factory);
     }
 
+    /// @dev MAX_HABITS gates *active* habits, not lifetime slots — deactivating one frees room
+    /// for a new one. habitCountOf still only ever grows (each create always takes the next
+    /// unused index; slots are never reused), so a user who repeatedly creates/deletes habits
+    /// over a long enough time will make _activeCount's loop (and settle()'s) gradually more
+    /// expensive. Fine at hackathon scale (realistically dozens of creates, not thousands);
+    /// would need real slot reuse or an append cap for sustained heavy usage.
     function createHabit() external {
-        uint256 count = habitCountOf[msg.sender];
-        if (count >= MAX_HABITS) revert TooManyHabits();
+        if (_activeCount(msg.sender) >= MAX_HABITS) revert TooManyHabits();
 
-        habitActive[msg.sender][count] = true;
-        habitCountOf[msg.sender] = count + 1;
+        uint256 index = habitCountOf[msg.sender];
+        habitActive[msg.sender][index] = true;
+        habitCountOf[msg.sender] = index + 1;
 
-        if (count == 0) {
+        if (index == 0) {
             uint256 today = _today();
             startDay[msg.sender] = today;
             nextSettleDay[msg.sender] = today; // today itself is not owed until tomorrow
         }
 
-        emit HabitCreated(msg.sender, count);
+        emit HabitCreated(msg.sender, index);
     }
 
     function setHabitActive(uint256 index, bool active) external {
@@ -97,6 +103,13 @@ contract HabitManager is Ownable {
 
     function habitCount(address user) external view returns (uint256) {
         return habitCountOf[user];
+    }
+
+    /// @notice Active (not deactivated) habit count — distinct from habitCount(), which is
+    /// lifetime slots and never shrinks. AccountabilityWallet.committedAmount() reads this to
+    /// scale the reserved stake by how many habits are actually at risk right now.
+    function activeHabitCount(address user) external view returns (uint256) {
+        return _activeCount(user);
     }
 
     /// @notice Called by the backend verifier after Gemini returns verified:true for today's proof.
@@ -146,6 +159,15 @@ contract HabitManager is Ownable {
         uint256 settled = totalDaysSettled[user];
         if (settled == 0) return 0;
         return (totalCompletedDays[user] * 10_000) / settled;
+    }
+
+    function _activeCount(address user) internal view returns (uint256) {
+        uint256 len = habitCountOf[user];
+        uint256 count = 0;
+        for (uint256 i = 0; i < len; i++) {
+            if (habitActive[user][i]) count++;
+        }
+        return count;
     }
 
     function _allActiveCompletedOn(address user, uint256 day) internal view returns (bool) {

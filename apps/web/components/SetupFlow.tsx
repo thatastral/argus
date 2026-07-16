@@ -1,29 +1,40 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { ArrowLeft } from "@phosphor-icons/react";
 import { parseUnits } from "viem";
-import { useAccount, usePublicClient, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
+import { useAccount, useReadContract, useWaitForTransactionReceipt, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
-import { PENALTY_TYPES, PENALTY_TYPE_INDEX, type PenaltyType } from "@/lib/penalty";
+import { PENALTY_TYPES, PENALTY_TYPE_INDEX, PENALTY_TYPE_LABEL, type PenaltyType } from "@/lib/penalty";
+import { useCreateHabit } from "@/hooks/useCreateHabit";
+import { useUnmirroredHabits } from "@/hooks/useUnmirroredHabits";
+import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
+import { useVaultTransfer } from "@/hooks/useVaultTransfer";
+import { HabitDurationPicker } from "./HabitDurationPicker";
+import { HabitDeadlineTimePicker } from "./HabitDeadlineTimePicker";
 import { WalletReconnect } from "./WalletReconnect";
 import { DeployWalletForm } from "./DeployWalletForm";
+import { Spinner } from "./Spinner";
 
-const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
-
-const STEPS = ["profile", "habit", "penalty", "wallet", "done"] as const;
+// "penalty" (consequence + per-habit stake) now comes before "wallet" (deploy + fund) and
+// "habit" moves to last — a habit can only ever be created once a funded vault exists, so
+// nobody creates a habit and starts uploading proof with nothing actually at risk. The penalty
+// step still has to precede wallet deploy: its asset picker (vaultAsset) fixes the vault's
+// deploy-time asset.
+const STEPS = ["profile", "penalty", "wallet", "habit", "done"] as const;
 type Step = (typeof STEPS)[number];
 
 const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEngine && addresses.argusFactory);
 
 export function SetupFlow({ onComplete }: { onComplete: () => void }) {
-  const { address, isConnected } = useAccount();
+  const { isConnected } = useAccount();
   const [displayName, setDisplayName] = useState("");
-  const [walletMode, setWalletMode] = useState<"easy" | "hard">("easy");
   const [vaultAsset, setVaultAsset] = useState<"mon" | "usdc">("mon");
   const [habitName, setHabitName] = useState("");
-  const [penaltyType, setPenaltyType] = useState<PenaltyType>("save");
-  const [partnerAddress, setPartnerAddress] = useState("");
+  const [targetDays, setTargetDays] = useState<number | null>(null);
+  const [deadlineTime, setDeadlineTime] = useState<string | null>(null);
+  const [penaltyType, setPenaltyType] = useState<PenaltyType>("savingsVault");
   const [stakeAmount, setStakeAmount] = useState("0.01");
   const [step, setStep] = useState<Step>("profile");
   const [busy, setBusy] = useState(false);
@@ -32,7 +43,28 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
   const { writeContractAsync } = useWriteContract();
   const { data: _receipt } = useWaitForTransactionReceipt();
   void _receipt;
-  const publicClient = usePublicClient({ chainId: activeChain.id });
+  const habitCreation = useCreateHabit();
+
+  // Deploy-then-fund sub-flow inside the "wallet" step — see the mandatory-deposit gate below.
+  const [walletDeployed, setWalletDeployed] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const {
+    walletAddress,
+    symbol: vaultSymbol,
+    availableFormatted,
+    refetchWalletAddress,
+    refetchAll: refetchVault,
+  } = useAccountabilityWallet();
+  const { deposit: doDeposit, busy: depositing, error: depositError } = useVaultTransfer();
+
+  const { data: donationAddressData } = useReadContract({
+    address: addresses.penaltyEngine,
+    abi: abis.penaltyEngine,
+    functionName: "donationAddress",
+    chainId: activeChain.id,
+    query: { enabled: Boolean(addresses.penaltyEngine) },
+  });
+  const donationAddress = donationAddressData as `0x${string}` | undefined;
 
   function back() {
     const i = STEPS.indexOf(step);
@@ -42,66 +74,37 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     }
   }
 
-  const [checkingExistingHabits, setCheckingExistingHabits] = useState(false);
+  // Shared with the post-setup "+ Add Habit" recovery flow (HabitList.tsx /
+  // RecoverHabitsModal.tsx) — see useUnmirroredHabits.ts for why this check exists and why it
+  // must never auto-name/auto-continue past an unmirrored on-chain habit.
+  const { unmirrored, recheck: recheckUnmirrored } = useUnmirroredHabits();
+  const checkingExistingHabits = step === "habit" && unmirrored === null;
+  const [recoveredNames, setRecoveredNames] = useState<Record<number, string>>({});
+  const [savingRecovered, setSavingRecovered] = useState(false);
 
-  // A habit can exist on-chain (createHabit succeeded) without ever making it into Supabase
-  // (the mirror POST failing — e.g. a stale session). Retrying "Create habit" in that state
-  // doesn't retry the save, it calls createHabit() again and silently creates a second
-  // on-chain habit slot — HabitManager has no dedupe. Before ever offering to create a habit,
-  // check whether one already exists on-chain and sync it instead. Habit names live in
-  // Supabase only (not on-chain), so a slot with no mirrored name gets a placeholder.
-  useEffect(() => {
-    if (step !== "habit" || !contractsDeployed || !address || !publicClient) return;
-    let cancelled = false;
-
-    (async () => {
-      setCheckingExistingHabits(true);
-      try {
-        const count = (await publicClient.readContract({
-          address: addresses.habitManager!,
-          abi: abis.habitManager,
-          functionName: "habitCount",
-          args: [address],
-        })) as bigint;
-
-        if (count === 0n) return;
-
-        const existingRes = await fetch("/api/habits");
-        const existing: { contract_index: number }[] = existingRes.ok ? (await existingRes.json()).habits : [];
-        const mirroredIndexes = new Set(existing.map((h) => h.contract_index));
-
-        for (let i = 0; i < Number(count); i++) {
-          if (mirroredIndexes.has(i)) continue;
-
-          const active = (await publicClient.readContract({
-            address: addresses.habitManager!,
-            abi: abis.habitManager,
-            functionName: "habitActive",
-            args: [address, BigInt(i)],
-          })) as boolean;
-
-          if (!active) continue;
-
-          await fetch("/api/habits", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contractIndex: i, name: `Habit ${i + 1}` }),
-          });
-        }
-
-        if (!cancelled) setStep("penalty");
-      } catch {
-        // If the sync check itself fails, fall through to the normal create-habit form —
-        // worst case the user re-attempts and hits the same error, not a worse one.
-      } finally {
-        if (!cancelled) setCheckingExistingHabits(false);
+  async function saveRecoveredHabits() {
+    if (!unmirrored) return;
+    setSavingRecovered(true);
+    setError(null);
+    try {
+      for (const h of unmirrored) {
+        const name = (recoveredNames[h.contractIndex] ?? "").trim();
+        const res = await fetch("/api/habits", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contractIndex: h.contractIndex, name }),
+        });
+        if (!res.ok) throw new Error("Failed to save a recovered habit — try again");
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [step, address, publicClient]);
+      await recheckUnmirrored();
+      setStep("done");
+      onComplete();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save recovered habits");
+    } finally {
+      setSavingRecovered(false);
+    }
+  }
 
   // Wallet requests (e.g. wallet_switchEthereumChain, eth_sendTransaction) have no
   // AbortController — a request that never gets a wallet response (extension conflicts,
@@ -123,10 +126,10 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       const res = await fetch("/api/user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName, walletMode }),
+        body: JSON.stringify({ displayName }),
       });
       if (!res.ok) throw new Error("Could not save profile");
-      setStep("habit");
+      setStep("penalty");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save profile");
     } finally {
@@ -134,44 +137,11 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     }
   }
 
-  async function createHabit() {
-    if (!contractsDeployed) {
-      setError("Contracts not deployed yet — see contracts/README.md, then set NEXT_PUBLIC_*_ADDRESS in .env.local");
-      return;
-    }
-    if (!publicClient || !address) return;
-    cancelledRef.current = false;
-    setBusy(true);
-    setError(null);
-    try {
-      // createHabit() always appends, so the new habit's index is whatever the count was
-      // right before this call — read it fresh rather than assuming this is always index 0.
-      const indexBefore = (await publicClient.readContract({
-        address: addresses.habitManager!,
-        abi: abis.habitManager,
-        functionName: "habitCount",
-        args: [address],
-      })) as bigint;
-
-      const hash = await writeContractAsync({
-        address: addresses.habitManager!,
-        abi: abis.habitManager,
-        functionName: "createHabit",
-        chainId: activeChain.id,
-      });
-      if (cancelledRef.current) return;
-      const mirrorRes = await fetch("/api/habits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contractIndex: Number(indexBefore), name: habitName }),
-      });
-      if (!mirrorRes.ok) throw new Error("Habit created on-chain but failed to save — refresh and try again");
-      console.log("createHabit tx", hash);
-      setStep("penalty");
-    } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to create habit on-chain");
-    } finally {
-      if (!cancelledRef.current) setBusy(false);
+  async function submitHabit() {
+    const ok = await habitCreation.createHabit(habitName, targetDays, deadlineTime);
+    if (ok) {
+      setStep("done");
+      onComplete();
     }
   }
 
@@ -189,14 +159,14 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
     setError(null);
     try {
       const decimals = vaultAsset === "usdc" ? 6 : 18;
+      const assetSymbol = vaultAsset === "usdc" ? "USDC" : "MON";
       const amountWei = parseUnits(stakeAmount || "0", decimals);
-      const partner = penaltyType === "partner" ? (partnerAddress as `0x${string}`) : "0x0000000000000000000000000000000000000000";
 
       await writeContractAsync({
         address: addresses.penaltyEngine!,
         abi: abis.penaltyEngine,
         functionName: "configurePenalty",
-        args: [PENALTY_TYPE_INDEX[penaltyType], partner, amountWei],
+        args: [PENALTY_TYPE_INDEX[penaltyType], amountWei],
         chainId: activeChain.id,
       });
       if (cancelledRef.current) return;
@@ -206,13 +176,13 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           penaltyType,
-          partnerAddress: penaltyType === "partner" ? partnerAddress : undefined,
           amountWei: amountWei.toString(),
+          assetSymbol,
+          assetDecimals: decimals,
         }),
       });
       if (!mirrorRes.ok) throw new Error("Penalty configured on-chain but failed to save — refresh and try again");
-      setStep(walletMode === "hard" ? "done" : "wallet");
-      if (walletMode === "hard") onComplete();
+      setStep("wallet");
     } catch (err) {
       if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to configure penalty on-chain");
     } finally {
@@ -223,16 +193,37 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
 
   const showBack = step !== "profile" && step !== "done";
 
+  const STEP_NUMBER: Record<(typeof STEPS)[number], number> = { profile: 1, penalty: 2, wallet: 3, habit: 4, done: 4 };
+  const totalSteps = 4;
+  const currentStepNumber = STEP_NUMBER[step];
+
   return (
     <div className="mx-auto w-full max-w-sm space-y-4">
+      {step !== "done" && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-muted">
+            Step {currentStepNumber} of {totalSteps}
+          </p>
+          <div className="flex gap-1">
+            {Array.from({ length: totalSteps }).map((_, i) => (
+              <div
+                key={i}
+                className={`h-1 flex-1 rounded-full ${i < currentStepNumber ? "bg-foreground" : "bg-surface"}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {showBack && (
-        <button onClick={back} className="text-xs text-muted underline">
-          ← Back
+        <button onClick={back} className="flex items-center gap-1 text-xs text-muted underline">
+          <ArrowLeft size={12} weight="bold" />
+          Back
         </button>
       )}
 
       {!contractsDeployed && (
-        <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
+        <p className="rounded-md bg-surface p-3 text-xs text-muted">
           Contracts aren&apos;t deployed yet. Run <code>forge script script/Deploy.s.sol</code> in{" "}
           <code>contracts/</code>, then set the <code>NEXT_PUBLIC_*_ADDRESS</code> env vars. You can still set your
           display name below.
@@ -241,52 +232,20 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
 
       {step === "profile" && (
         <div className="space-y-3">
-          <label className="block text-sm font-medium">Display name</label>
+          <label className="block text-sm font-medium text-white/70">Display name</label>
           <input
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder="How should Argus greet you?"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="w-full rounded-md bg-surface px-3 py-2 text-sm"
           />
-
-          <label className="block text-sm font-medium">Wallet mode</label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setWalletMode("easy")}
-              className={`rounded-md border px-3 py-2 text-left text-sm ${
-                walletMode === "easy" ? "border-foreground bg-surface" : "border-border"
-              }`}
-            >
-              Easy Mode
-              <span className="mt-1 block text-xs font-normal text-muted">
-                Argus deploys a vault you own; deposit into it.
-              </span>
-            </button>
-            <button
-              onClick={() => setWalletMode("hard")}
-              className={`rounded-md border px-3 py-2 text-left text-sm ${
-                walletMode === "hard" ? "border-foreground bg-surface" : "border-border"
-              }`}
-            >
-              Hard Mode
-              <span className="mt-1 block text-xs font-normal text-muted">
-                Use your own wallet directly — no deposit needed.
-              </span>
-            </button>
-          </div>
-          {walletMode === "hard" && (
-            <p className="rounded-md border border-border bg-surface p-3 text-xs text-muted">
-              Hard Mode&apos;s spend-blocking enforcement needs the Chrome Extension, which isn&apos;t built in this
-              scaffold yet. Your habits and streak will still track fully on-chain — penalties just won&apos;t move
-              funds until the extension exists.
-            </p>
-          )}
 
           <button
             onClick={saveProfile}
             disabled={busy || !displayName}
-            className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
           >
+            {busy && <Spinner size={14} />}
             Continue
           </button>
         </div>
@@ -296,29 +255,64 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         <p className="text-center text-sm text-muted">Checking for existing habits…</p>
       )}
 
-      {step === "habit" && !checkingExistingHabits && (
+      {step === "habit" && !checkingExistingHabits && unmirrored && unmirrored.length > 0 && (
         <div className="space-y-3">
-          <label className="block text-sm font-medium">Your first habit</label>
+          <label className="block text-sm font-medium text-white/70">
+            We found {unmirrored.length} existing habit{unmirrored.length === 1 ? "" : "s"} on this wallet
+          </label>
+          <p className="text-xs text-muted">
+            This wallet already has active habit slots on-chain from before — name each one to bring it into your
+            dashboard.
+          </p>
+          {unmirrored.map((h) => (
+            <input
+              key={h.contractIndex}
+              value={recoveredNames[h.contractIndex] ?? ""}
+              onChange={(e) => setRecoveredNames((prev) => ({ ...prev, [h.contractIndex]: e.target.value }))}
+              placeholder={`Name for habit slot ${h.contractIndex + 1}`}
+              className="w-full rounded-md bg-surface px-3 py-2 text-sm"
+            />
+          ))}
+          <button
+            onClick={saveRecoveredHabits}
+            disabled={savingRecovered || unmirrored.some((h) => !(recoveredNames[h.contractIndex] ?? "").trim())}
+            className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
+          >
+            {savingRecovered && <Spinner size={14} />}
+            {savingRecovered ? "Saving…" : "Continue"}
+          </button>
+        </div>
+      )}
+
+      {step === "habit" && !checkingExistingHabits && unmirrored && unmirrored.length === 0 && (
+        <div className="space-y-3">
+          <label className="block text-sm font-medium text-white/70">Your first habit</label>
           <input
             value={habitName}
             onChange={(e) => setHabitName(e.target.value)}
             placeholder="e.g. Code, Gym, Read"
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="w-full rounded-md bg-surface px-3 py-2 text-sm"
           />
+
+          <HabitDurationPicker value={targetDays} onChange={setTargetDays} />
+          <HabitDeadlineTimePicker value={deadlineTime} onChange={setDeadlineTime} />
+
           {isConnected ? (
             <>
               <button
-                onClick={createHabit}
-                disabled={busy || !habitName}
-                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+                onClick={submitHabit}
+                disabled={habitCreation.busy || !habitName}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
               >
-                {busy ? "Confirm in wallet…" : "Create habit"}
+                {habitCreation.busy && <Spinner size={14} />}
+                {habitCreation.busy ? "Confirm in wallet…" : "Create habit"}
               </button>
-              {busy && (
-                <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
+              {habitCreation.busy && (
+                <button onClick={habitCreation.cancel} className="w-full text-center text-xs text-muted underline">
                   Stuck? Cancel and try again
                 </button>
               )}
+              {habitCreation.error && <p className="text-xs text-red-500">{habitCreation.error}</p>}
             </>
           ) : (
             <WalletReconnect />
@@ -328,58 +322,66 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
 
       {step === "penalty" && (
         <div className="space-y-3">
-          <label className="block text-sm font-medium">If you miss a day</label>
+          <label className="block text-sm font-medium text-white/70">If you miss a day</label>
           <div className="grid grid-cols-2 gap-2">
             {PENALTY_TYPES.map((type) => (
               <button
                 key={type}
                 onClick={() => setPenaltyType(type)}
-                className={`relative rounded-md border px-3 py-2 text-sm capitalize ${
-                  penaltyType === type ? "border-foreground bg-surface" : "border-border"
+                className={`relative rounded-md px-3 py-2 text-left text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] ${
+                  penaltyType === type ? "bg-foreground text-background" : "bg-surface"
                 }`}
               >
-                {type}
-                {type === "surprise" && (
-                  <span className="mt-1 block w-fit rounded-full bg-border px-2 py-0.5 text-[10px] font-normal normal-case text-muted">
-                    picks one at random
+                {PENALTY_TYPE_LABEL[type]}
+                {type === "savingsVault" && (
+                  <span
+                    className={`mt-1 block w-fit rounded-full px-2 py-0.5 text-[10px] font-normal ${
+                      penaltyType === "savingsVault" ? "bg-background/20 opacity-70" : "bg-background text-muted"
+                    }`}
+                  >
+                    Recommended
+                  </span>
+                )}
+                {type === "donate" && donationAddress && (
+                  <span
+                    className={`mt-1 block w-fit rounded-full px-2 py-0.5 font-mono text-[10px] font-normal ${
+                      penaltyType === "donate" ? "bg-background/20 opacity-70" : "bg-background text-muted"
+                    }`}
+                  >
+                    {donationAddress.slice(0, 6)}…{donationAddress.slice(-4)}
                   </span>
                 )}
               </button>
             ))}
           </div>
-          {penaltyType === "partner" && (
-            <>
-              <input
-                value={partnerAddress}
-                onChange={(e) => setPartnerAddress(e.target.value)}
-                placeholder="Partner's wallet address (0x…)"
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
-              />
-              {partnerAddress && !ADDRESS_PATTERN.test(partnerAddress) && (
-                <p className="text-xs text-red-500">Not a valid address — expected 0x followed by 40 hex characters.</p>
-              )}
-            </>
+          {penaltyType === "savingsVault" ? (
+            <p className="text-xs text-muted">
+              A missed day moves your stake into a locked Savings Vault — still yours, released once the lock
+              period passes.
+            </p>
+          ) : (
+            <p className="text-xs text-muted">A missed day sends your stake to Argus, immediately.</p>
           )}
 
-          <label className="block text-sm font-medium">Amount at stake per missed day</label>
+          <label className="block text-sm font-medium text-white/70">Amount at stake per habit, per missed day</label>
           <div className="flex gap-2">
             <input
               value={stakeAmount}
               onChange={(e) => setStakeAmount(e.target.value)}
               inputMode="decimal"
-              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+              className="flex-1 rounded-md bg-surface px-3 py-2 text-sm"
             />
-            <div className="flex rounded-md border border-border p-0.5">
+            <div className="flex gap-1 rounded-md p-0.5">
               <button
                 onClick={() => setVaultAsset("mon")}
-                className={`rounded px-3 py-1.5 text-xs ${vaultAsset === "mon" ? "bg-surface text-foreground" : "text-muted"}`}
+                className={`rounded px-3 py-1.5 text-xs transition-transform duration-150 ease-emil-out active:scale-[0.97] ${vaultAsset === "mon" ? "bg-surface text-foreground" : "text-muted"}`}
               >
                 MON
               </button>
               <button
                 onClick={() => setVaultAsset("usdc")}
                 disabled={!addresses.usdc}
-                className={`rounded px-3 py-1.5 text-xs disabled:opacity-40 ${
+                className={`rounded px-3 py-1.5 text-xs transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-40 ${
                   vaultAsset === "usdc" ? "bg-surface text-foreground" : "text-muted"
                 }`}
               >
@@ -389,11 +391,13 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
           </div>
           <p className="text-xs text-muted">
             This also decides what your Accountability Wallet holds — {vaultAsset === "usdc" ? "USDC" : "MON"} in
-            the next step.
+            the next step. This amount is charged <span className="text-foreground">per habit</span> — with up to
+            3 active habits, as much as {stakeAmount && !Number.isNaN(Number(stakeAmount)) ? Number(stakeAmount) * 3 : "3×"} {vaultAsset === "usdc" ? "USDC" : "MON"} could be Committed at once if you missed all of them the same day.
+            Everything else you deposit stays freely withdrawable.
           </p>
-          {penaltyType !== "save" && (!stakeAmount || Number(stakeAmount) === 0) && (
-            <p className="text-xs text-amber-500">
-              With nothing staked, missing a day won&apos;t actually have a consequence.
+          {(!stakeAmount || Number(stakeAmount) <= 0) && (
+            <p className="text-xs text-red-500">
+              A stake amount is required — missing a day needs a real consequence.
             </p>
           )}
 
@@ -401,14 +405,10 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
             <>
               <button
                 onClick={configurePenalty}
-                disabled={
-                  busy ||
-                  (penaltyType === "partner" && !ADDRESS_PATTERN.test(partnerAddress)) ||
-                  !stakeAmount ||
-                  Number.isNaN(Number(stakeAmount))
-                }
-                className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+                disabled={busy || !stakeAmount || Number.isNaN(Number(stakeAmount)) || Number(stakeAmount) <= 0}
+                className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
               >
+                {busy && <Spinner size={14} />}
                 {busy ? "Confirm in wallet…" : "Continue"}
               </button>
               {busy && (
@@ -423,19 +423,67 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         </div>
       )}
 
-      {step === "wallet" && (
+      {step === "wallet" && !walletDeployed && (
         <div className="space-y-3">
-          <label className="block text-sm font-medium">Deploy your Accountability Wallet</label>
+          <label className="block text-sm font-medium text-white/70">Deploy your Accountability Wallet</label>
           <p className="text-xs text-muted">
             This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
           </p>
           <DeployWalletForm
             defaultAsset={vaultAsset}
             onDeployed={() => {
-              setStep("done");
-              onComplete();
+              setWalletDeployed(true);
+              refetchWalletAddress();
             }}
           />
+        </div>
+      )}
+
+      {step === "wallet" && walletDeployed && !walletAddress && (
+        <p className="text-center text-sm text-muted">Setting up your vault…</p>
+      )}
+
+      {step === "wallet" && walletDeployed && walletAddress && (
+        <div className="space-y-3">
+          <label className="block text-sm font-medium text-white/70">Fund your wallet</label>
+          <p className="text-xs text-muted">
+            Deposit at least {stakeAmount} {vaultSymbol} — your habit&apos;s stake — before creating a habit, so
+            you&apos;re never uploading proof with nothing actually at risk.
+          </p>
+          <div className="flex gap-2">
+            <input
+              value={depositAmount}
+              onChange={(e) => setDepositAmount(e.target.value)}
+              placeholder={`Amount (${vaultSymbol})`}
+              inputMode="decimal"
+              className="flex-1 rounded-md bg-surface px-3 py-2 text-sm"
+            />
+            <button
+              onClick={async () => {
+                if (await doDeposit(depositAmount)) {
+                  setDepositAmount("");
+                  refetchVault();
+                }
+              }}
+              disabled={depositing || !depositAmount || Number.isNaN(Number(depositAmount))}
+              className="flex items-center gap-1.5 rounded-md bg-surface px-3 py-2 text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
+            >
+              {depositing && <Spinner size={14} />}
+              {depositing ? "Depositing…" : "Deposit"}
+            </button>
+          </div>
+          <p className="text-xs text-muted">
+            Available: {Number(availableFormatted).toFixed(4)} {vaultSymbol}
+          </p>
+          {depositError && <p className="text-xs text-red-500">{depositError}</p>}
+
+          <button
+            onClick={() => setStep("habit")}
+            disabled={Number(availableFormatted) < Number(stakeAmount)}
+            className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
+          >
+            Continue
+          </button>
         </div>
       )}
 

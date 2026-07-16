@@ -4,16 +4,31 @@ pragma solidity 0.8.28;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IPenaltyEngineView} from "./interfaces/IPenaltyEngineView.sol";
 import {IHabitManager} from "./interfaces/IHabitManager.sol";
 
 /// @notice Non-custodial per-user vault. Deployed by ArgusFactory, owned entirely by the
-/// user's own wallet address. Argus never holds funds or keys — withdrawals are gated by
-/// HabitManager's daily unlock state, and only PenaltyEngine may pull funds on a missed day.
+/// user's own wallet address. Argus never holds funds or keys, and the owner's wallet is
+/// never locked wholesale — only funds they've explicitly committed are governed.
+///
+/// Three logical balances. Only `savingsVaultAmount` is actually stored; the other two are
+/// live views so they can never drift out of sync with a deposit/withdraw/reconfigure:
+/// - **Available** (`availableBalance()`): withdrawable anytime, never gated by habit progress.
+/// - **Committed** (`committedAmount()`): the user's own configured *per-habit* stake
+///   (`PenaltyEngine.penaltyAmountOf`) times how many habits are currently active
+///   (`HabitManager.activeHabitCount`), clamped to whatever the vault can actually cover right
+///   now — computed fresh on every call rather than stored, so there's no separate "commit"
+///   transaction to keep in sync with deposits/withdrawals/reconfiguring the stake amount or
+///   creating/deactivating a habit.
+/// - **Savings Vault** (`savingsVaultAmount`): funds moved here by a missed day (see
+///   `moveToSavingsVault`) — still the user's own funds, just locked until
+///   `savingsVaultUnlockAt`. A rolling lock: a new miss while already locked extends the
+///   unlock time from now rather than tracking independent per-tranche timers.
 ///
 /// `asset` is fixed at deploy time: address(0) means the vault holds native MON, any other
 /// address means the vault holds that ERC-20 (e.g. USDC) exclusively. A given vault only
 /// ever holds one asset — mixing native and ERC-20 in a single vault would make `balanceOf`
-/// and the unlock/penalty amount semantics ambiguous.
+/// and the committed/penalty amount semantics ambiguous.
 contract AccountabilityWallet is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -22,13 +37,16 @@ contract AccountabilityWallet is ReentrancyGuard {
     address public immutable penaltyEngine;
     address public immutable asset;
 
+    uint256 public savingsVaultAmount;
+    uint256 public savingsVaultUnlockAt;
+
     event Deposited(address indexed from, uint256 amount);
     event Withdrawn(address indexed to, uint256 amount);
     event PenaltyPaid(address indexed recipient, uint256 amount);
+    event MovedToSavingsVault(uint256 amount, uint256 unlockAt);
 
     error NotOwner();
     error NotPenaltyEngine();
-    error WalletLocked();
     error InsufficientBalance();
     error TransferFailed();
     error WrongAssetPath();
@@ -69,10 +87,11 @@ contract AccountabilityWallet is ReentrancyGuard {
         emit Deposited(msg.sender, amount);
     }
 
-    /// @notice Withdraw is only allowed once today's active habits are all verified complete.
+    /// @notice Withdraw from the Available balance — never gated by habit progress. Committed
+    /// and (while still locked) Savings-Vault funds are excluded automatically by
+    /// availableBalance()'s own math, not by a separate boolean check.
     function withdraw(uint256 amount) external nonReentrant onlyOwner {
-        if (!IHabitManager(habitManager).isUnlockedToday(owner)) revert WalletLocked();
-        if (amount > balanceOf()) revert InsufficientBalance();
+        if (amount > availableBalance()) revert InsufficientBalance();
 
         if (asset == address(0)) {
             (bool ok,) = owner.call{value: amount}("");
@@ -84,7 +103,7 @@ contract AccountabilityWallet is ReentrancyGuard {
         emit Withdrawn(owner, amount);
     }
 
-    /// @notice Called by PenaltyEngine only, when the owner misses a day's habits.
+    /// @notice Called by PenaltyEngine only, for the Donate consequence.
     function executePenalty(uint256 amount, address payable recipient) external nonReentrant onlyPenaltyEngine {
         if (amount > balanceOf()) revert InsufficientBalance();
 
@@ -98,7 +117,49 @@ contract AccountabilityWallet is ReentrancyGuard {
         emit PenaltyPaid(recipient, amount);
     }
 
+    /// @notice Called by PenaltyEngine only, for the SavingsVault consequence. Funds never
+    /// leave this contract — they're just re-earmarked so availableBalance() excludes them
+    /// until the lock expires.
+    function moveToSavingsVault(uint256 amount) external nonReentrant onlyPenaltyEngine {
+        if (amount > balanceOf() - savingsVaultAmount) revert InsufficientBalance();
+
+        savingsVaultAmount += amount;
+        savingsVaultUnlockAt = block.timestamp + IPenaltyEngineView(penaltyEngine).SAVINGS_VAULT_LOCK_PERIOD();
+        emit MovedToSavingsVault(amount, savingsVaultUnlockAt);
+    }
+
     function balanceOf() public view returns (uint256) {
         return asset == address(0) ? address(this).balance : IERC20(asset).balanceOf(address(this));
+    }
+
+    /// @notice The user's own configured *per-habit* stake, times how many habits are actually
+    /// active right now, clamped to what's available to cover it. A live view, not stored state
+    /// — see the contract-level doc comment. Multiplying by activeHabitCount matters because a
+    /// single missed day can fail every active habit at once (settle() is pass/fail per day, not
+    /// per habit — see HabitManager._allActiveCompletedOn) and PenaltyEngine.execute() moves this
+    /// entire figure in one shot; a wallet that only ever reserved one habit's worth of stake
+    /// would silently be exposed for more than it showed. Because it's a *standing* commitment
+    /// (configurePenalty isn't a one-shot action) and activeHabitCount can change independently
+    /// of any deposit/withdraw, it re-derives itself continuously: e.g. a 0.5-ether-per-habit
+    /// stake across 2 active habits on a 1.5-ether balance that just moved 1 ether into the
+    /// Savings Vault immediately re-commits the same 1 ether from what's left, so
+    /// availableBalance() is 0 until more is deposited — the user stays "at risk" for the next
+    /// day automatically, without a separate re-commit transaction.
+    function committedAmount() public view returns (uint256) {
+        uint256 configured =
+            IPenaltyEngineView(penaltyEngine).penaltyAmountOf(owner) * IHabitManager(habitManager).activeHabitCount(owner);
+        uint256 uncommitted = balanceOf() - _lockedSavingsVault();
+        return configured > uncommitted ? uncommitted : configured;
+    }
+
+    /// @notice Withdrawable right now: everything except what's committed and whatever's
+    /// still locked in the Savings Vault. Once the lock expires this reincludes
+    /// savingsVaultAmount automatically — no separate "claim" transaction needed.
+    function availableBalance() public view returns (uint256) {
+        return balanceOf() - committedAmount() - _lockedSavingsVault();
+    }
+
+    function _lockedSavingsVault() internal view returns (uint256) {
+        return block.timestamp < savingsVaultUnlockAt ? savingsVaultAmount : 0;
     }
 }

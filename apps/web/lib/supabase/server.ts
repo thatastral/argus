@@ -23,13 +23,12 @@ export function supabaseAdmin() {
 /// (manually deleted in the Supabase dashboard, a wiped table during testing, etc.), and
 /// when it does, every FK-dependent write fails with an opaque 23503 with no indication why.
 /// Call this before any such write so a missing row self-heals instead of hard-failing.
-/// ignoreDuplicates means an existing row (and its display_name/wallet_mode) is left alone.
+/// ignoreDuplicates means an existing row (and its display_name) is left alone.
 export async function ensureUser(supabase: SupabaseClient, wallet: string): Promise<boolean> {
   const { error } = await supabase.from("users").upsert(
     {
       wallet_address: wallet,
       display_name: `${wallet.slice(0, 6)}...${wallet.slice(-4)}`,
-      wallet_mode: "easy",
     },
     { onConflict: "wallet_address", ignoreDuplicates: true },
   );

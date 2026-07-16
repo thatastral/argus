@@ -11,14 +11,18 @@ Foundry project for Argus's on-chain layer on Monad.
   active/inactive slot per index and whether it's been verified complete on a given day; that's
   the part that actually needs to be tamper-proof (see `packages/supabase`'s schema comment for
   the fuller on-chain-vs-off-chain rationale).
-- **PenaltyEngine** — user-configured consequence (Save / Donate / Accountability Partner /
-  Surprise), executed by HabitManager on a missed day.
+- **PenaltyEngine** — user-configured consequence (SavingsVault / Donate), executed by
+  HabitManager on a missed day. Reads the amount to move fresh from the wallet's own
+  `committedAmount()` rather than storing it itself.
 - **AccountabilityWallet** — one per user, deployed by ArgusFactory, **owned entirely by the
-  user's own wallet address**. Argus never takes custody of funds or keys. Withdrawals check
-  `HabitManager.isUnlockedToday()`; only PenaltyEngine may pull funds, and only on a missed day.
-  Denominated in either native MON (`asset == address(0)`) or an ERC-20 like USDC, fixed per
-  vault at deploy time — `deposit()`/`depositERC20()` are separate paths and each reverts on
-  the wrong one for a given vault.
+  user's own wallet address**. Argus never takes custody of funds or keys, and the wallet is
+  never locked wallet-wide — three balances (Available/Committed/Savings Vault, see the
+  contract's own doc comment) mean only the funds a user explicitly committed are ever
+  unwithdrawable; `withdraw()` checks only `availableBalance()`. Only PenaltyEngine may move
+  funds, on a missed day, either out (Donate) or into the Savings Vault (SavingsVault — a rolling
+  lock, still the user's own funds). Denominated in either native MON (`asset == address(0)`) or
+  an ERC-20 like USDC, fixed per vault at deploy time — `deposit()`/`depositERC20()` are separate
+  paths and each reverts on the wrong one for a given vault.
 - **ArgusFactory** — deploys each user's AccountabilityWallet (`deployWallet(asset)`) and
   records `walletOf(user)` so HabitManager/PenaltyEngine can find it.
 - **MockUSDC** — testnet-only ERC-20 stand-in for USDC (6 decimals, open `mint()`). Deployed
@@ -81,11 +85,10 @@ if the API is down.
 
 ## Known simplifications (hackathon MVP — revisit before mainnet with real value at stake)
 
-- `PenaltyEngine._resolve`'s Surprise type uses `block.prevrandao`-based pseudo-randomness,
-  which a block producer can bias within a narrow window. Fine for small self-imposed
-  penalties; swap for a VRF if amounts get meaningful.
-- `HabitManager.settle()` is permissionless but settles one day per call — a keeper (cron in
-  `apps/web`, or just the user's own next interaction) needs to call it. No keeper is wired up
-  yet in this scaffold.
+- `HabitManager.settle()` is permissionless but settles one day per call — a real Vercel Cron
+  (`apps/web/vercel.json` + `/api/cron/settle`) calls it daily across every wallet, on top of
+  opportunistic same-session catch-up calls; see CLAUDE.md's "Known gaps" for the full picture.
+- `AccountabilityWallet.SAVINGS_VAULT_LOCK_PERIOD` (on `PenaltyEngine`, 7 days) isn't specified
+  by the product doc — a reasonable MVP default, easy to change before a real deploy.
 - No gas-limit tuning has been done on the frontend side yet — see the `gas` monskill before
   wiring up transaction UI (Monad charges on `gas_limit`, not gas used).

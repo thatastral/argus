@@ -3,9 +3,11 @@
 AI-powered accountability wallet on Monad. See `Argus PRD.md` (in Downloads, not checked in
 here) for full product spec.
 
-This scaffold covers the **core** of the PRD: Desktop web app (Easy Mode + Chat), the four
-on-chain contracts, and Supabase. Mobile (React Native/Expo) and the Chrome extension
-(Hard Mode) are not scaffolded yet — see PRD for scope when picking those up.
+This scaffold covers the **core** of the PRD: the Desktop web app (accountability wallet + AI
+chat), the four on-chain contracts, and Supabase. Users connect their own wallet and deploy a
+personal Accountability Wallet — their wallet itself is never locked, only funds they explicitly
+commit toward a habit are governed. Mobile (React Native/Expo) isn't scaffolded yet — see PRD for
+scope when picking that up.
 
 ## Structure
 
@@ -49,8 +51,8 @@ block at the top of the SQL migration for the full breakdown.
 
 - Built with guidance from the `monskill` skill (Monad-specific patterns: chain definitions,
   gas model, contract verification). See `.monskills` for provenance.
-- No keeper is wired up yet to call `HabitManager.settle()` daily — needs a cron (Vercel Cron
-  hitting a new `/api/cron/settle` route, or similar) before this is a real daily-accountability
-  loop instead of a manual one.
+- `HabitManager.settle()` runs on a real daily cron (`vercel.json` + `/api/cron/settle`), on top
+  of opportunistic catch-up calls from `/api/state` and `/api/verify` — see CLAUDE.md's "Known
+  gaps" for the full picture.
 - Design system intentionally minimal per PRD: white/black/grey only, no gradients — see
   `apps/web/app/globals.css`.

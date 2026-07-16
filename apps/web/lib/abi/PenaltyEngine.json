@@ -17,17 +17,25 @@
   },
   {
     "type": "function",
+    "name": "SAVINGS_VAULT_LOCK_PERIOD",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "configurePenalty",
     "inputs": [
       {
         "name": "penaltyType",
         "type": "uint8",
         "internalType": "enum PenaltyEngine.PenaltyType"
-      },
-      {
-        "name": "partner",
-        "type": "address",
-        "internalType": "address"
       },
       {
         "name": "amount",
@@ -94,25 +102,6 @@
     "type": "function",
     "name": "owner",
     "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "partnerOf",
-    "inputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
     "outputs": [
       {
         "name": "",
@@ -255,12 +244,6 @@
         "internalType": "enum PenaltyEngine.PenaltyType"
       },
       {
-        "name": "partner",
-        "type": "address",
-        "indexed": false,
-        "internalType": "address"
-      },
-      {
         "name": "amount",
         "type": "uint256",
         "indexed": false,
@@ -322,11 +305,6 @@
   {
     "type": "error",
     "name": "AlreadySet",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidPartner",
     "inputs": []
   },
   {
