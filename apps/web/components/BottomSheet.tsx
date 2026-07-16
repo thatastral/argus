@@ -44,7 +44,12 @@ export function BottomSheet({
             Close
           </button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto p-5">{children}</div>
+        {/* Only mount children while open — otherwise their hooks (RPC polling, etc.) keep
+            running in the background while hidden, and their inputs/buttons stay reachable
+            by keyboard Tab order despite being invisible (opacity/pointer-events don't remove
+            an element from the tab order). Unmounting doesn't affect the close transition,
+            which is driven by the wrapper's translate-y, not by anything in here. */}
+        <div className="max-h-[70vh] overflow-y-auto p-5">{open && children}</div>
       </div>
     </div>,
     document.body,

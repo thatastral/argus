@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 
 export function ConfirmDialog({
   open,
@@ -19,9 +20,14 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
-  if (!open) return null;
+  if (!open || typeof document === "undefined") return null;
 
-  return (
+  // Portalled to document.body rather than rendered in place: this dialog is opened from
+  // inside BottomSheet's content, and BottomSheet's panel has an active CSS transform
+  // (translate-y, for the slide animation) — a transformed ancestor becomes the containing
+  // block for `position: fixed` descendants, which would make "fixed inset-0" cover the
+  // sheet's panel instead of the viewport. Escaping via portal sidesteps that entirely.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="w-full max-w-sm rounded-lg border border-border bg-background p-5">
         <h3 className="text-sm font-medium">{title}</h3>
@@ -43,6 +49,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

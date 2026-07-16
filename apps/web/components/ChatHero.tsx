@@ -31,8 +31,9 @@ export function ChatHero() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userMessage }),
       });
-      const data = await res.json();
-      setMessages((prev) => [...prev, { role: "assistant", content: data.reply ?? "Something went wrong." }]);
+      const data = await res.json().catch(() => null);
+      const content = res.ok && data?.reply ? data.reply : (data?.error ?? "Something went wrong. Try again.");
+      setMessages((prev) => [...prev, { role: "assistant", content }]);
     } catch {
       setMessages((prev) => [...prev, { role: "assistant", content: "Something went wrong. Try again." }]);
     } finally {
