@@ -7,13 +7,19 @@ import { HabitList } from "@/components/HabitList";
 import { WalletStatus } from "@/components/WalletStatus";
 import { ChatHero } from "@/components/ChatHero";
 import { BottomSheet } from "@/components/BottomSheet";
+import { Modal } from "@/components/Modal";
+import { SettingsSheet } from "@/components/SettingsSheet";
+import { StreakPanel } from "@/components/StreakPanel";
 import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
+import { useStreak } from "@/hooks/useStreak";
+import type { PenaltyType } from "@/lib/penalty";
 
 interface StateResponse {
   wallet: string;
   user: { display_name: string; wallet_mode: string } | null;
   habits: { contract_index: number; name: string; active: boolean }[];
   streak: { current_streak: number; longest_streak: number; completion_rate_bps: number } | null;
+  penalty: { penalty_type: PenaltyType; partner_address: string | null; amount_wei: string } | null;
   todaysCompletions: { contract_index: number; verified: boolean }[];
 }
 
@@ -27,7 +33,7 @@ function timeGreeting() {
 export default function Home() {
   const [sessionWallet, setSessionWallet] = useState<string | null | undefined>(undefined);
   const [state, setState] = useState<StateResponse | null>(null);
-  const [openSheet, setOpenSheet] = useState<"habits" | "wallet" | null>(null);
+  const [openOverlay, setOpenOverlay] = useState<"habits" | "wallet" | "streak" | "settings" | null>(null);
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/state");
@@ -54,6 +60,7 @@ export default function Home() {
   }, [sessionWallet]);
 
   const { balanceFormatted, symbol, isUnlocked } = useAccountabilityWallet();
+  const { currentStreak } = useStreak();
 
   if (sessionWallet === undefined) {
     return null;
@@ -81,6 +88,7 @@ export default function Home() {
   }
 
   const completedIndexes = state.todaysCompletions.filter((c) => c.verified).map((c) => c.contract_index);
+  const closeOverlay = () => setOpenOverlay(null);
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center justify-center gap-10 px-4 py-12">
@@ -90,7 +98,7 @@ export default function Home() {
         </p>
         <p className="mt-2 font-mono text-xs uppercase tracking-wide text-muted">
           {isUnlocked ? "unlocked" : "locked"}
-          {state.streak && ` · streak ${state.streak.current_streak}d`}
+          {currentStreak !== undefined && currentStreak > 0 && ` · streak ${currentStreak}d`}
         </p>
       </div>
 
@@ -99,37 +107,62 @@ export default function Home() {
           {timeGreeting()}
           {state.user?.display_name ? `, ${state.user.display_name}` : ""}
         </h1>
-        {state.streak && (
-          <p className="mt-1 font-mono text-xs uppercase tracking-wide text-muted">
-            best streak {state.streak.longest_streak}d · {(state.streak.completion_rate_bps / 100).toFixed(0)}%
-            completion
-          </p>
-        )}
       </div>
 
       <ChatHero />
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-center gap-2">
         <button
-          onClick={() => setOpenSheet("habits")}
+          onClick={() => setOpenOverlay("habits")}
           className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
         >
           Habits
         </button>
         <button
-          onClick={() => setOpenSheet("wallet")}
+          onClick={() => setOpenOverlay("wallet")}
           className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
         >
           Wallet
         </button>
+        <button
+          onClick={() => setOpenOverlay("streak")}
+          className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
+        >
+          Streak
+        </button>
+        <button
+          onClick={() => setOpenOverlay("settings")}
+          className="rounded-full border border-border px-4 py-1.5 text-xs uppercase tracking-wide text-muted hover:text-foreground"
+        >
+          Settings
+        </button>
       </div>
 
-      <BottomSheet open={openSheet === "habits"} title="Today's habits" onClose={() => setOpenSheet(null)}>
+      {/* Habits and Settings are deliberate destinations (forms, multi-field), so they open as
+          centered modals. Wallet and Streak are quick glances/actions, so they slide up from
+          the bottom instead — the visual difference is intentional, not incidental. */}
+      <Modal open={openOverlay === "habits"} title="Today's habits" onClose={closeOverlay}>
         <HabitList habits={state.habits} completedIndexes={completedIndexes} onVerified={loadState} />
+      </Modal>
+
+      <Modal open={openOverlay === "settings"} title="Settings" onClose={closeOverlay}>
+        <SettingsSheet
+          displayName={state.user?.display_name ?? ""}
+          walletMode={state.user?.wallet_mode}
+          currentPenalty={state.penalty}
+          onSaved={() => {
+            loadState();
+            closeOverlay();
+          }}
+        />
+      </Modal>
+
+      <BottomSheet open={openOverlay === "wallet"} title="Wallet" onClose={closeOverlay}>
+        <WalletStatus walletMode={state.user?.wallet_mode} />
       </BottomSheet>
 
-      <BottomSheet open={openSheet === "wallet"} title="Wallet" onClose={() => setOpenSheet(null)}>
-        <WalletStatus />
+      <BottomSheet open={openOverlay === "streak"} title="Discipline streak" onClose={closeOverlay}>
+        <StreakPanel displayName={state.user?.display_name ?? ""} />
       </BottomSheet>
     </main>
   );
