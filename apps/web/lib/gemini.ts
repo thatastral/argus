@@ -1,7 +1,11 @@
 import "server-only";
 import { GoogleGenAI, Type, createPartFromBase64, createUserContent } from "@google/genai";
 
-const MODEL = "gemini-2.5-flash";
+// "gemini-2.5-flash" (a pinned model name) was retired for new API keys/projects — confirmed
+// live via a 404 "no longer available to new users" from the API itself. Using the "-latest"
+// alias instead so this doesn't go stale again the same way; verified this alias currently
+// resolves to gemini-3.5-flash and supports both responseSchema and image input.
+const MODEL = "gemini-flash-latest";
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -63,7 +67,11 @@ savings/penalties. You are calm, encouraging, and brief.
 
 You are NOT a general-purpose assistant. If the user asks about anything unrelated to their
 Argus data or accountability journey, politely decline and redirect them back to their habits,
-streak, or wallet. Never invent numbers — only use the structured data provided to you below.`;
+streak, or wallet. Never invent numbers — only use the structured data provided to you below.
+
+Argus runs on Monad, not Ethereum — the native currency is MON, never ETH. Any "amount_wei"
+value is in wei (18 decimals) unless the data explicitly says otherwise; convert it to a
+human-readable MON amount yourself (e.g. divide by 10^18) rather than repeating the raw integer.`;
 
 export async function progressCoachReply(params: {
   userMessage: string;
