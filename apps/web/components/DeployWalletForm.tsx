@@ -5,6 +5,9 @@ import { useAccount, useWriteContract } from "wagmi";
 import { addresses, abis, NATIVE_ASSET } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { WalletReconnect } from "./WalletReconnect";
+import { Spinner } from "./Spinner";
+import { Tooltip } from "./Tooltip";
+import { useToast } from "./Toast";
 
 /// Asset choice + deploy button for a user's AccountabilityWallet. Shared between SetupFlow's
 /// wallet step (first-time setup) and WalletStatus's recovery path (an Easy Mode user who
@@ -19,6 +22,7 @@ export function DeployWalletForm({
 }) {
   const { isConnected } = useAccount();
   const { writeContractAsync } = useWriteContract();
+  const toast = useToast();
   const [vaultAsset, setVaultAsset] = useState<"mon" | "usdc">(defaultAsset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +51,7 @@ export function DeployWalletForm({
         chainId: activeChain.id,
       });
       if (cancelledRef.current) return;
+      toast("Accountability Wallet deployed");
       onDeployed();
     } catch (err) {
       if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to deploy Accountability Wallet");
@@ -59,11 +64,14 @@ export function DeployWalletForm({
 
   return (
     <div className="space-y-3">
+      <Tooltip label="A vault only ever holds one asset, fixed at deploy time — pick whichever you&apos;ll actually fund it with.">
+        <span className="text-xs text-muted underline decoration-dotted">What&apos;s this?</span>
+      </Tooltip>
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => setVaultAsset("mon")}
-          className={`rounded-md border px-3 py-2 text-sm ${
-            vaultAsset === "mon" ? "border-foreground bg-surface" : "border-border"
+          className={`rounded-md px-3 py-2 text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] ${
+            vaultAsset === "mon" ? "bg-foreground text-background" : "bg-surface"
           }`}
         >
           MON
@@ -71,8 +79,8 @@ export function DeployWalletForm({
         <button
           onClick={() => setVaultAsset("usdc")}
           disabled={!addresses.usdc}
-          className={`rounded-md border px-3 py-2 text-sm disabled:opacity-40 ${
-            vaultAsset === "usdc" ? "border-foreground bg-surface" : "border-border"
+          className={`rounded-md px-3 py-2 text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-40 ${
+            vaultAsset === "usdc" ? "bg-foreground text-background" : "bg-surface"
           }`}
         >
           USDC
@@ -82,8 +90,9 @@ export function DeployWalletForm({
       <button
         onClick={deploy}
         disabled={busy}
-        className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-50"
       >
+        {busy && <Spinner size={14} />}
         {busy ? "Confirm in wallet…" : "Deploy wallet"}
       </button>
       {busy && (

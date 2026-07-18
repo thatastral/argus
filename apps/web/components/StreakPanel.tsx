@@ -1,5 +1,6 @@
 "use client";
 
+import { DownloadSimple } from "@phosphor-icons/react";
 import { useStreak } from "@/hooks/useStreak";
 
 const CARD_SIZE = 1080;
@@ -56,29 +57,22 @@ function downloadStreakCard(params: {
 }
 
 export function StreakPanel({ displayName }: { displayName: string }) {
-  const { currentStreak, longestStreak, completionRateBps, settleToday, settling, settleMessage } = useStreak();
+  const { currentStreak, longestStreak, completionRateBps } = useStreak();
 
   const hasData = currentStreak !== undefined;
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-border bg-surface p-6 text-center">
-        <p className="text-6xl font-semibold tabular-nums">{hasData ? currentStreak : "—"}</p>
-        <p className="mt-1 font-mono text-xs uppercase tracking-wide text-muted">day streak</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-lg border border-border p-4 text-center">
-          <p className="text-2xl font-medium tabular-nums">{hasData ? longestStreak : "—"}</p>
-          <p className="mt-1 font-mono text-xs uppercase tracking-wide text-muted">longest</p>
-        </div>
-        <div className="rounded-lg border border-border p-4 text-center">
-          <p className="text-2xl font-medium tabular-nums">
-            {hasData ? `${(completionRateBps! / 100).toFixed(0)}%` : "—"}
-          </p>
-          <p className="mt-1 font-mono text-xs uppercase tracking-wide text-muted">completion</p>
-        </div>
-      </div>
+    // One visual card matching downloadStreakCard's own art direction (dark surface, centered
+    // wordmark/number/label stack) so the on-screen preview and the actual downloaded PNG read
+    // as the same object, not three separate stat boxes plus an unrelated button underneath.
+    <div className="group relative overflow-hidden rounded-2xl bg-[#0d0d0d] px-6 py-10 text-center">
+      <p className="text-xs font-semibold tracking-[0.3em] text-white/70">ARGUS</p>
+      <p className="mt-6 text-7xl font-bold tabular-nums text-[#ededed]">{hasData ? currentStreak : "—"}</p>
+      <p className="mt-2 text-sm font-medium uppercase tracking-wide text-white/60">Day streak</p>
+      <p className="mt-4 text-sm text-[#ededed]">
+        {hasData ? `Best ${longestStreak}d · ${(completionRateBps! / 100).toFixed(0)}% completion` : "—"}
+      </p>
+      {displayName && <p className="mt-6 text-xs text-white/40">{displayName}</p>}
 
       <button
         onClick={() =>
@@ -90,25 +84,11 @@ export function StreakPanel({ displayName }: { displayName: string }) {
           })
         }
         disabled={!hasData}
-        className="w-full rounded-md border border-border px-3 py-2 text-sm disabled:opacity-50"
+        aria-label="Download shareable card"
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-[opacity,transform] duration-150 ease-emil-out active:scale-[0.97] disabled:pointer-events-none disabled:opacity-0 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
       >
-        Download shareable card
+        <DownloadSimple size={16} weight="bold" />
       </button>
-
-      <div className="rounded-md border border-border bg-surface p-3">
-        <p className="text-xs text-muted">
-          No automatic daily settlement is running yet — use this to close out a finished day and update your
-          streak.
-        </p>
-        <button
-          onClick={settleToday}
-          disabled={settling}
-          className="mt-2 w-full rounded-md bg-foreground px-3 py-2 text-sm text-background disabled:opacity-50"
-        >
-          {settling ? "Settling…" : "Settle today"}
-        </button>
-        {settleMessage && <p className="mt-2 text-xs text-muted">{settleMessage}</p>}
-      </div>
     </div>
   );
 }

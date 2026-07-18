@@ -1,141 +1,180 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { formatUnits } from "viem";
+import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
+import { useUnmirroredHabits } from "@/hooks/useUnmirroredHabits";
+import { AddHabitModal } from "./AddHabitModal";
+import { EditHabitModal } from "./EditHabitModal";
+import { DayGroupsList, type HistoryResponse } from "./HabitDayGroups";
+import { HistoryModal } from "./HistoryModal";
+import { Modal } from "./Modal";
+import { RecoverHabitsModal } from "./RecoverHabitsModal";
 
-interface Habit {
-  contract_index: number;
-  name: string;
-  active: boolean;
-}
+const PRESS_FEEDBACK = "transition-transform duration-150 ease-emil-out active:scale-[0.97]";
 
-interface VerifyResult {
-  verified: boolean;
-  confidence: number;
-  reason: string;
-}
+const MAX_HABITS = 3; // must match HabitManager.MAX_HABITS
 
-const MAX_PROOF_FILE_BYTES = 8 * 1024 * 1024; // 8MB — base64 inflates ~33%, keep well under typical body limits
+export function HabitList({ onChange, refreshToken }: { onChange?: () => void; refreshToken?: number }) {
+  const [data, setData] = useState<HistoryResponse | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [capNoticeOpen, setCapNoticeOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [editing, setEditing] = useState<{ contractIndex: number; name: string } | null>(null);
+  const [fundsNoticeOpen, setFundsNoticeOpen] = useState(false);
+  const { symbol, assetDecimals, walletAddress, availableFormatted } = useAccountabilityWallet();
 
-function fileToBase64(file: File): Promise<{ base64: string; mimeType: string }> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(",")[1] ?? "";
-      resolve({ base64, mimeType: file.type });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+  // Detects a habit that succeeded on-chain but failed to mirror to Supabase (confirmed live —
+  // a habit creation attempt in this exact state) — must be resolved via RecoverHabitsModal
+  // before "+ Add Habit" is usable again, or a retry would create a second orphaned slot.
+  // Also the source of `activeCount`: MAX_HABITS is enforced on-chain against *active* habits
+  // (deactivating frees a slot — see HabitManager.createHabit()'s `_activeCount` check), and
+  // there's no cheaper on-chain view for that than this hook's own habitActive() scan, so "+ Add
+  // Habit" is gated on it rather than the raw lifetime habitCount().
+  const { unmirrored, activeCount, recheck: recheckUnmirrored } = useUnmirroredHabits();
 
-function HabitRow({
-  habit,
-  completed,
-  onVerified,
-}: {
-  habit: Habit;
-  completed: boolean;
-  onVerified: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState<VerifyResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const res = await fetch("/api/habits/history");
+    if (res.ok) setData(await res.json());
+  }, []);
 
-  async function handleFile(file: File) {
-    if (file.size > MAX_PROOF_FILE_BYTES) {
-      setError("That image is too large — try one under 8MB.");
-      return;
-    }
-    setUploading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const { base64, mimeType } = await fileToBase64(file);
-      const res = await fetch("/api/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contractIndex: habit.contract_index, imageBase64: base64, mimeType }),
+  // refreshToken in the dependency array is what lets the nav bar's single "refresh everything"
+  // button (AppHeader.tsx, wired through app/page.tsx) re-trigger this fetch from a sibling
+  // component — this file has no other way to know a global refresh happened, since its data
+  // fetching is entirely internal. Also fires once on mount, same as before (starts at 0/undefined).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/habits/history")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json) setData(json);
       });
-      if (!res.ok) throw new Error("Verification request failed");
-      const data: VerifyResult = await res.json();
-      setResult(data);
-      if (data.verified) onVerified();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshToken]);
+
+  const stakeAmountFormatted =
+    data?.stakeAmountWei != null
+      ? Number(formatUnits(BigInt(data.stakeAmountWei), walletAddress ? assetDecimals : 18))
+      : null;
+  const stakeLabel = stakeAmountFormatted != null ? `${stakeAmountFormatted} ${walletAddress ? symbol : "MON"}` : null;
+
+  const hasUnmirrored = Boolean(unmirrored && unmirrored.length > 0);
+  const atCap = activeCount !== null && activeCount >= MAX_HABITS;
+  // committedAmount() scales with active habit count (see AccountabilityWallet.sol) — adding one
+  // more habit needs one more habit's worth of stake actually available, or the on-chain
+  // createHabit() would succeed while leaving the vault under-collateralized for its own
+  // configured consequence. Only checked once a stake is actually configured and a vault exists.
+  const insufficientFunds = Boolean(
+    walletAddress && stakeAmountFormatted !== null && Number(availableFormatted) < stakeAmountFormatted,
+  );
+  // Only truly disabled (unclickable) while activeCount is still loading (null — defaulting to 0
+  // there would briefly let "+ Add Habit" appear enabled for an account already at the cap) or
+  // while an unmirrored habit must be resolved first (RecoverHabitsModal, non-dismissible, is
+  // already forced open in that state). At the cap or with insufficient funds, the button stays
+  // clickable so tapping it can explain why via a notice modal, instead of silently doing nothing.
+  const addHabitDisabled = activeCount === null || hasUnmirrored;
 
   return (
-    <div className="rounded-lg border border-border p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{habit.name}</span>
-        <span
-          className={`rounded-full px-2 py-0.5 text-xs ${
-            completed ? "bg-surface text-foreground" : "border border-border text-muted"
-          }`}
-        >
-          {completed ? "Done today" : "Not done yet"}
-        </span>
-      </div>
-
-      {!completed && (
-        <div className="mt-3">
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-          />
+    <div className="w-full space-y-8">
+      <div>
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-light text-white/70">Habits</h2>
           <button
-            onClick={() => inputRef.current?.click()}
-            disabled={uploading}
-            className="rounded-md border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+            onClick={() => {
+              if (atCap) setCapNoticeOpen(true);
+              else if (insufficientFunds) setFundsNoticeOpen(true);
+              else setAddOpen(true);
+            }}
+            disabled={addHabitDisabled}
+            className={`text-sm font-medium text-white/70 hover:text-foreground disabled:cursor-default disabled:opacity-40 ${PRESS_FEEDBACK}`}
           >
-            {uploading ? "Verifying…" : "Upload proof"}
+            + Add Habit
           </button>
         </div>
+        <div className="mt-4 border-t border-border" />
+      </div>
+
+      {!data ? null : (
+        <DayGroupsList
+          days={data.days}
+          stakeLabel={stakeLabel}
+          onVerified={() => {
+            load();
+            onChange?.();
+          }}
+          onEdit={(contractIndex, name) => setEditing({ contractIndex, name })}
+        />
       )}
 
-      {result && (
-        <p className={`mt-2 text-xs ${result.verified ? "text-foreground" : "text-red-500"}`}>
-          {result.verified ? "✓" : "✗"} {result.reason} ({Math.round(result.confidence * 100)}% confidence)
+      {data && data.days.length > 0 && (
+        <button
+          onClick={() => setHistoryOpen(true)}
+          className={`text-sm font-medium text-muted hover:text-foreground ${PRESS_FEEDBACK}`}
+        >
+          View full history
+        </button>
+      )}
+
+      <RecoverHabitsModal
+        open={hasUnmirrored}
+        habits={unmirrored ?? []}
+        onSaved={() => {
+          recheckUnmirrored();
+          load();
+          onChange?.();
+        }}
+      />
+
+      <AddHabitModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onCreated={() => {
+          load();
+          recheckUnmirrored();
+          onChange?.();
+        }}
+      />
+
+      <EditHabitModal
+        key={editing?.contractIndex ?? "none"}
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        contractIndex={editing?.contractIndex ?? null}
+        currentName={editing?.name ?? ""}
+        onSaved={load}
+        onDeleted={() => {
+          load();
+          recheckUnmirrored();
+          onChange?.();
+        }}
+      />
+
+      <HistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onVerified={() => {
+          load();
+          onChange?.();
+        }}
+      />
+
+      <Modal open={capNoticeOpen} title="3 habits at a time" onClose={() => setCapNoticeOpen(false)}>
+        <p className="text-sm text-muted">
+          You&apos;ve got {MAX_HABITS} active habits already — that&apos;s the most Argus tracks at once. Tap the
+          pencil icon on one of today&apos;s habits and delete it to free up a slot right away, then add your new
+          one — no need to wait for tomorrow.
         </p>
-      )}
-      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
-    </div>
-  );
-}
+      </Modal>
 
-export function HabitList({
-  habits,
-  completedIndexes,
-  onVerified,
-}: {
-  habits: Habit[];
-  completedIndexes: number[];
-  onVerified: () => void;
-}) {
-  if (habits.length === 0) {
-    return <p className="text-sm text-muted">No habits yet.</p>;
-  }
-
-  return (
-    <div className="space-y-3">
-      {habits
-        .filter((h) => h.active)
-        .map((habit) => (
-          <HabitRow
-            key={habit.contract_index}
-            habit={habit}
-            completed={completedIndexes.includes(habit.contract_index)}
-            onVerified={onVerified}
-          />
-        ))}
+      <Modal open={fundsNoticeOpen} title="Not enough available balance" onClose={() => setFundsNoticeOpen(false)}>
+        <p className="text-sm text-muted">
+          Another habit needs {stakeLabel} available to cover its stake — you currently have{" "}
+          {Number(availableFormatted).toFixed(4)} {walletAddress ? symbol : "MON"} available. Deposit more from the
+          Wallet modal, then try again.
+        </p>
+      </Modal>
     </div>
   );
 }

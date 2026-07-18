@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { useAccount, useConnect, useDisconnect, useSignMessage, useSwitchChain } from "wagmi";
 import { activeChain } from "@/lib/wagmi";
+import { Spinner } from "./Spinner";
+
+const PRESS_FEEDBACK = "transition-transform duration-150 ease-emil-out active:scale-[0.97]";
 
 export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => void }) {
   const { address, isConnected, chainId } = useAccount();
@@ -12,8 +15,17 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
   const { switchChainAsync, isPending: isSwitchingChain } = useSwitchChain();
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Shown only right after an in-app disconnect, to set the right expectation for wallets that
+  // silently reconnect to the same address (see the comment near the hint text below).
+  const [justDisconnected, setJustDisconnected] = useState(false);
 
   const onWrongChain = isConnected && chainId !== activeChain.id;
+
+  function disconnectAndReset() {
+    setError(null);
+    setJustDisconnected(true);
+    disconnect();
+  }
 
   async function signIn() {
     if (!address) return;
@@ -46,11 +58,6 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
   }
 
   if (!isConnected) {
-    // Don't guess which injected connector to use — with multiple wallet extensions
-    // installed (e.g. Phantom + MetaMask), wagmi auto-registers one connector per
-    // EIP-6963-announced provider, and blindly picking "the first injected one" can grab
-    // a non-EVM provider (e.g. Phantom's EVM shim returning a Solana address, which then
-    // crashes viem's address checksum). List every detected wallet and let the user pick.
     if (connectors.length === 0) {
       return <p className="text-xs text-muted">No wallet found — install MetaMask or Rabby.</p>;
     }
@@ -59,13 +66,26 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
         {connectors.map((connector) => (
           <button
             key={connector.uid}
-            onClick={() => connect({ connector })}
+            onClick={() => {
+              setJustDisconnected(false);
+              connect({ connector });
+            }}
             disabled={isConnecting}
-            className="w-48 rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+            className={`flex w-48 items-center justify-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm text-background ${PRESS_FEEDBACK} disabled:opacity-50`}
           >
+            {isConnecting && <Spinner size={14} />}
             {isConnecting ? "Connecting…" : `Connect ${connector.name}`}
           </button>
         ))}
+        {justDisconnected && (
+          // Some wallet extensions silently reconnect to the same address once the origin
+          // already has a grant — the app already requests wallet_requestPermissions to force
+          // a fresh account picker, but that only works for wallets that implement EIP-2255.
+          <p className="max-w-48 text-center text-xs text-muted">
+            Still seeing the same address? Revoke this site&apos;s access in your wallet&apos;s settings to pick a
+            different one.
+          </p>
+        )}
       </div>
     );
   }
@@ -84,8 +104,9 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
           <button
             onClick={() => switchChainAsync({ chainId: activeChain.id }).catch((err) => setError(err.message))}
             disabled={isSwitchingChain}
-            className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+            className={`flex items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm text-background ${PRESS_FEEDBACK} disabled:opacity-50`}
           >
+            {isSwitchingChain && <Spinner size={14} />}
             {isSwitchingChain ? "Switching…" : `Switch to ${activeChain.name}`}
           </button>
         </div>
@@ -94,11 +115,12 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
           <button
             onClick={signIn}
             disabled={isSigningIn}
-            className="rounded-md bg-foreground px-4 py-2 text-sm text-background disabled:opacity-50"
+            className={`flex items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm text-background ${PRESS_FEEDBACK} disabled:opacity-50`}
           >
+            {isSigningIn && <Spinner size={14} />}
             {isSigningIn ? "Signing in…" : "Sign in with Wallet"}
           </button>
-          <button onClick={() => disconnect()} className="rounded-md border border-border px-4 py-2 text-sm">
+          <button onClick={disconnectAndReset} className={`rounded-md bg-surface px-4 py-2 text-sm ${PRESS_FEEDBACK}`}>
             Disconnect
           </button>
         </div>
