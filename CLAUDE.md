@@ -110,15 +110,29 @@ recomputed on every read, never a separate transaction to keep in sync:
   wallet-wide anymore — that model (the whole vault locked until today's habits were done) was
   removed along with Hard Mode.
 - **Committed** (`committedAmount()`) — `PenaltyEngine.penaltyAmountOf(owner) *
-  HabitManager.activeHabitCount(owner)`, clamped to whatever the vault can actually cover right
+  HabitManager.pendingHabitCount(owner)`, clamped to whatever the vault can actually cover right
   now. Multiplied, not flat: a single missed day fails every active habit at once, so a lone
   habit's stake was never the real worst-case exposure once a user has more than one running —
   the flat version undercounted a user with, say, 3 habits and only enough stake for one.
-  `HabitManager.activeHabitCount(user)` is a new external view (wrapping the same internal
-  `_activeCount` the 3-habit-cap gotcha below already describes) added specifically so the vault
-  could read it. It's also a *standing* commitment: once a miss moves it into the Savings Vault,
-  the same configured amount immediately re-commits from whatever's left, so the user stays "at
-  risk" going forward with no separate re-commit action — see
+  `pendingHabitCount(user)` (`HabitManager.sol`) counts active habits **not yet verified complete
+  today** — a direct instruction ("once a user completes a habit, make its stake available to
+  withdraw immediately") — so completing a habit removes its share from Committed the moment
+  `completeHabit()` is called, before real UTC-midnight settlement, with no separate transaction
+  (Available is just `balanceOf() - committedAmount() - locked`, so this is a pure view
+  recalculation, not a fund transfer — there is only one real balance in the contract). This
+  replaced an earlier version keyed on `activeHabitCount(user)` alone (active regardless of
+  today's completion), which is still exposed as its own view but no longer read by
+  `committedAmount()`. **Accepted trade-off, documented in `pendingHabitCount`'s own doc
+  comment**: `PenaltyEngine.execute()` reads `committedAmount()` fresh whenever `settle()`
+  actually runs for a past day, not a snapshot from the day that failed — completing today's
+  habits before a backlog of unsettled past misses is cleared can partially reduce what gets
+  penalized for one of those earlier misses. Accepted deliberately for now (testnet; the
+  opportunistic settle-on-every-load/verify calls plus the daily cron keep backlogs rare and
+  small) rather than adding the extra complexity of forcing settlement to catch up first.
+  It's also still a *standing* commitment for whatever's still pending: once a miss moves it into
+  the Savings Vault, the same configured amount immediately re-commits from whatever's left (for
+  habits still pending that day), so the user stays "at risk" for the rest of the day
+  automatically with no separate re-commit action — see
   `AccountabilityWallet.committedAmount()`'s doc comment for a worked example.
 - **Savings Vault** (`savingsVaultAmount` / `savingsVaultUnlockAt`) — what a missed day moved
   here, still the user's own funds, locked until the unlock timestamp. A *rolling* lock: a new
@@ -137,7 +151,7 @@ after the first, alongside the existing 3-habit cap.
 
 `withdraw()` checks only `availableBalance()` and never touches `HabitManager` itself.
 `habitManager` is present in the constructor again (see the deploy order above), but solely so
-`committedAmount()` can read `activeHabitCount` — `isUnlockedToday()`'s old wallet-wide gating
+`committedAmount()` can read `pendingHabitCount` — `isUnlockedToday()`'s old wallet-wide gating
 role is still gone for good; this is a narrower read-only dependency, not a revival of Hard Mode.
 Only `PenaltyEngine` may move funds, via `executePenalty()` (Donate — an actual transfer out) or
 `moveToSavingsVault()` (re-earmarks in place; funds never leave the contract). Frontend looks up
@@ -543,6 +557,18 @@ from `wagmi/chains` / `viem/chains` directly — never hand-define these chain o
 addresses come from `NEXT_PUBLIC_HABIT_MANAGER_ADDRESS` / `NEXT_PUBLIC_PENALTY_ENGINE_ADDRESS`
 / `NEXT_PUBLIC_ARGUS_FACTORY_ADDRESS` / `NEXT_PUBLIC_USDC_ADDRESS` (`lib/contracts.ts`).
 
+`wagmiConfig` (`lib/wagmi.ts`) turns on two batching layers, per a direct "make every wallet
+action fast" instruction — before this, a screen like the Wallet modal (`useAccountabilityWallet
+.ts` alone fires up to 8 separate contract reads for one vault) issued one `eth_call` round-trip
+per read even though most land in the same render tick: `batch: { multicall: true }` makes viem
+auto-batch same-tick `readContract` calls into one `Multicall3.aggregate3` call instead (both
+`monad`/`monadTestnet`'s viem chain definitions already carry the canonical Multicall3 address,
+so this needed no extra deployment/wiring); each transport's own `{ batch: true }` additionally
+coalesces same-tick JSON-RPC calls Multicall3 can't wrap (e.g. `useBalance`'s native-MON
+`eth_getBalance`) into one HTTP POST. `pollingInterval` is also dropped from wagmi's 4s default to
+1s, matching Monad's own ~400ms block time / ~800ms finality — the 4s default meant a `watch`-ed
+read (balances, streak) could lag up to 4s behind a transaction that had already confirmed.
+
 ### Design constraints (Figma spec, current phase)
 
 Dark-only theme, no light mode. Exact tokens in `apps/web/app/globals.css`: background
@@ -743,6 +769,18 @@ a rejected/cancelled signature doesn't lose an already-valid name change, and `n
   drift is exactly what that hook exists to catch. If you add a new place that needs to know "can
   this wallet create another habit," reuse `useUnmirroredHabits()`'s `activeCount` — don't
   reintroduce a raw `habitCount()` read for this purpose.
+  **A direct, real consequence of "index only ever grows, never reused":** `contract_index` is
+  unbounded above (any wallet that creates/deletes enough habits over time will legitimately
+  reach index 3, 4, 5...) — every Zod schema and the `habits` table's own check constraint used to
+  cap it at `max(2)` / `between 0 and 2`, wrongly treating "index" as if it meant the same thing
+  as "active count." Confirmed live as a real, severe bug: a wallet with an active on-chain habit
+  at index 3 got permanently stuck on a non-dismissible "Existing habits found" recovery modal
+  that could never actually save, since the mirror write was rejected at both the API validation
+  layer and the database layer every single time. Fixed by dropping the upper bound everywhere it
+  appeared — `app/api/habits/route.ts` (both schemas), `app/api/verify/route.ts`, `app/api/verify/
+  challenge/route.ts`, and `packages/supabase/migrations/0006_habits_index_no_upper_bound.sql`
+  (only `contract_index >= 0` now). If you ever add a new route that takes a `contractIndex`,
+  don't reintroduce a `.max(2)` — there is no valid upper bound on this value, only `>= 0`.
 - **A Supabase column referenced in a route's `select`/`insert` before its migration is applied
   fails the whole query silently** (PostgREST returns a generic error, not "column doesn't
   exist" in an obvious spot) — this has caused real, confusing cascading bugs live: adding

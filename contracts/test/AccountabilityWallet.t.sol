@@ -115,6 +115,38 @@ contract AccountabilityWalletTest is ArgusTestBase {
         assertEq(wallet.availableBalance(), 0.8 ether);
     }
 
+    function test_committedAmount_dropsImmediatelyOnCompletion() public {
+        AccountabilityWallet wallet = deployWalletFor(user, address(0));
+        vm.deal(user, 1 ether);
+        vm.prank(user);
+        wallet.deposit{value: 1 ether}();
+
+        vm.startPrank(user);
+        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.SavingsVault, 0.1 ether);
+        habitManager.createHabit(); // index 0
+        habitManager.createHabit(); // index 1 — 2 active, both still pending today
+        vm.stopPrank();
+
+        assertEq(wallet.committedAmount(), 0.2 ether);
+        assertEq(wallet.availableBalance(), 0.8 ether);
+
+        // Completing one habit today removes it from the pending multiplier immediately — its
+        // share of the stake becomes withdrawable with no separate transaction, matching
+        // committedAmount()'s existing "live view" model.
+        vm.prank(verifier);
+        habitManager.completeHabit(user, 0);
+
+        assertEq(wallet.committedAmount(), 0.1 ether);
+        assertEq(wallet.availableBalance(), 0.9 ether);
+
+        // The still-pending habit (index 1) keeps its share committed.
+        vm.prank(verifier);
+        habitManager.completeHabit(user, 1);
+
+        assertEq(wallet.committedAmount(), 0);
+        assertEq(wallet.availableBalance(), 1 ether);
+    }
+
     function test_withdraw_revertsForNonOwner() public {
         AccountabilityWallet wallet = deployWalletFor(user, address(0));
         address stranger = makeAddr("stranger");

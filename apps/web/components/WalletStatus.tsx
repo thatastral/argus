@@ -66,7 +66,18 @@ function WalletHeaderRow({ address, onSignOut }: { address: `0x${string}`; onSig
 
 /// Deposit/withdraw controls — rendered inside the Wallet modal. The balance number itself also
 /// lives in the home screen hero (useAccountabilityWallet is the shared source for both).
-export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
+export function WalletStatus({
+  onSignOut,
+  configuredAssetSymbol,
+}: {
+  onSignOut: () => void;
+  // From state.penalty.asset_symbol (app/page.tsx) — the asset the user's already-configured
+  // stake amount was parsed with during onboarding's penalty step, reachable here since the
+  // "no vault yet" recovery branch below needs to deploy that exact same asset, not offer a
+  // fresh, independently changeable choice — see DeployWalletForm.tsx's doc comment for why a
+  // mismatch there silently breaks committedAmount().
+  configuredAssetSymbol: string | null;
+}) {
   const { address, isConnected } = useAccount();
   const {
     walletAddress,
@@ -143,8 +154,11 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
     // dashboard. Let them finish right here instead.
     return (
       <div className="space-y-3">
-        <p className="text-sm text-muted">You haven&apos;t deployed an Accountability Wallet yet.</p>
-        <DeployWalletForm onDeployed={refetchWalletAddress} />
+        <p className="text-sm text-muted">Wallet not set up yet.</p>
+        <DeployWalletForm
+          asset={configuredAssetSymbol === "USDC" ? "usdc" : "mon"}
+          onDeployed={refetchWalletAddress}
+        />
       </div>
     );
   }
@@ -183,7 +197,7 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
       ) : (
         <div className="space-y-1 rounded-md bg-surface p-3">
           <div className="flex items-center justify-between text-xs">
-            <Tooltip label="Never locked — send this back to your own wallet anytime.">
+            <Tooltip label="Never locked — withdraw anytime.">
               <span className="text-muted underline decoration-dotted">Available — withdraw anytime</span>
             </Tooltip>
             <span>
@@ -191,7 +205,7 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
             </span>
           </div>
           <div className="flex items-center justify-between text-xs">
-            <Tooltip label="Your stake amount × your number of active habits — this is what's actually at risk right now. 0 here with a stake configured just means you have no active habits yet.">
+            <Tooltip label="Stake × active habits. Shows 0 with no active habits.">
               <span className="text-muted underline decoration-dotted">Committed — your active stake</span>
             </Tooltip>
             <span>
@@ -199,7 +213,7 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
             </span>
           </div>
           <div className="flex items-center justify-between text-xs">
-            <Tooltip label="Where a missed day's stake goes if you've chosen Savings Vault — still your own funds, released after the lock period.">
+            <Tooltip label="Your funds — released when lock ends.">
               <span className="text-muted underline decoration-dotted">
                 {savingsVaultLocked
                   ? `Savings Vault — locked until ${new Date(savingsVaultUnlockAt * 1000).toLocaleDateString()}`
@@ -211,15 +225,13 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
             </span>
           </div>
           <p className="pt-1 text-[11px] text-muted">
-            Missing a day with Savings Vault selected locks your stake here for a set period — still yours, just
-            delayed.
+            Missed day locks your stake here — still yours, just delayed.
           </p>
         </div>
       )}
 
       <p className="text-xs text-muted">
-        This is a real contract you own — fund it via Deposit below, or by sending {symbol} directly to this
-        address from any wallet or exchange.
+        You own this wallet — deposit below or send {symbol} here directly.
       </p>
 
       {isConnected ? (
@@ -275,7 +287,7 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
           </div>
           {exceedsAvailable && (
             <p className="text-xs text-red-500">
-              Exceeds your Available balance ({Number(availableFormatted).toFixed(4)} {symbol}).
+              Exceeds available balance ({Number(availableFormatted).toFixed(4)} {symbol}).
             </p>
           )}
         </>

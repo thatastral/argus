@@ -232,7 +232,7 @@ export function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => v
       <div className="flex-1 space-y-5 overflow-y-auto px-6 pb-4">
         {messages.length === 0 && (
           <div className="space-y-2.5 pt-2">
-            <p className="text-sm text-muted">Ask about your streak, wallet, or progress — or ask me to add a habit.</p>
+            <p className="text-sm text-muted">Ask about your streak, wallet, progress, or add a habit.</p>
             <div className="flex flex-wrap gap-2">
               {QUICK_ACTIONS.map((q) => (
                 <button

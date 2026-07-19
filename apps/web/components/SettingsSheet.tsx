@@ -148,7 +148,7 @@ export function SettingsSheet({
       <section className="space-y-3">
         <div className="flex items-center gap-1.5">
           <label className="block text-sm font-medium text-white/70">If you miss a day</label>
-          <Tooltip label="Only your configured stake is ever affected — the rest of your wallet balance always stays freely withdrawable.">
+          <Tooltip label="Only your stake is affected — the rest stays withdrawable.">
             <span className="flex h-4 w-4 items-center justify-center rounded-full bg-surface text-[10px] text-muted">?</span>
           </Tooltip>
         </div>
@@ -185,8 +185,7 @@ export function SettingsSheet({
         </div>
         {penaltyType === "savingsVault" ? (
           <p className="text-xs text-muted">
-            A missed day moves your stake into a locked Savings Vault — still yours, released once the lock
-            period passes.
+            Stake locks in Savings Vault — still yours, released later.
           </p>
         ) : (
           <p className="text-xs text-muted">A missed day sends your stake to Argus, immediately.</p>
@@ -204,15 +203,13 @@ export function SettingsSheet({
         </div>
         {!walletAddress && !currentPenalty?.asset_symbol && (
           <p className="text-xs text-muted">
-            No vault deployed yet — this will be denominated in whichever asset your Accountability Wallet ends up
-            holding.
+            No wallet yet — uses whichever asset you fund it with.
           </p>
         )}
         {activeCount !== null && activeCount > 0 && stakeAmount && !Number.isNaN(Number(stakeAmount)) && (
           <p className="text-xs text-muted">
-            Charged per habit — with {activeCount} active habit{activeCount === 1 ? "" : "s"}, up to{" "}
-            {(Number(stakeAmount) * activeCount).toFixed(4)} {resolvedSymbol} could be Committed at once if you
-            missed all of them the same day.
+            Charged per habit — miss all {activeCount} the same day and up to{" "}
+            {(Number(stakeAmount) * activeCount).toFixed(4)} {resolvedSymbol} is at risk.
           </p>
         )}
         {stakeMissing && (
@@ -238,12 +235,12 @@ export function SettingsSheet({
         open={confirming}
         title="Update settings"
         description={
-          (nameDirty ? "Your display name will be updated, and " : "") +
-          `if you miss a day, ${PENALTY_TYPE_LABEL[penaltyType]} will apply — ${stakeAmount} ${resolvedSymbol}${
+          (nameDirty ? "Your name will update, and missing a day " : "Missing a day ") +
+          `will trigger ${PENALTY_TYPE_LABEL[penaltyType]} — ${stakeAmount} ${resolvedSymbol}${
             penaltyType === "donate" && donationAddress
               ? ` (${donationAddress.slice(0, 6)}…${donationAddress.slice(-4)})`
               : ""
-          }. This changes what's enforced on-chain.`
+          }.`
         }
         confirmLabel="Confirm"
         pending={busy || savingName}

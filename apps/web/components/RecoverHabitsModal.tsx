@@ -55,10 +55,7 @@ export function RecoverHabitsModal({
     <Modal open={open} title="Existing habits found" onClose={() => {}} dismissible={false}>
       <div className="space-y-3">
         <p className="text-xs text-muted">
-          We found {habits.length} habit slot{habits.length === 1 ? "" : "s"} already active on-chain with no name
-          saved — likely from a habit creation that succeeded on-chain but failed to save. Name{" "}
-          {habits.length === 1 ? "it" : "each one"} to bring {habits.length === 1 ? "it" : "them"} into your
-          dashboard before adding anything new.
+          Found {habits.length} unnamed habit slot{habits.length === 1 ? "" : "s"} on-chain — likely from a creation that succeeded on-chain but failed to save. Name {habits.length === 1 ? "it" : "each one"} to bring {habits.length === 1 ? "it" : "them"} into your dashboard.
         </p>
         {habits.map((h) => (
           <input

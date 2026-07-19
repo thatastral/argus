@@ -106,10 +106,34 @@ contract HabitManager is Ownable {
     }
 
     /// @notice Active (not deactivated) habit count — distinct from habitCount(), which is
-    /// lifetime slots and never shrinks. AccountabilityWallet.committedAmount() reads this to
-    /// scale the reserved stake by how many habits are actually at risk right now.
+    /// lifetime slots and never shrinks.
     function activeHabitCount(address user) external view returns (uint256) {
         return _activeCount(user);
+    }
+
+    /// @notice Active habits not yet verified complete today — what AccountabilityWallet reads
+    /// (instead of activeHabitCount) to scale Committed, so a habit's stake becomes withdrawable
+    /// the moment it's completed for the day rather than staying reserved until midnight. Flips
+    /// back to "pending" automatically at the next UTC day boundary, since completedOn is keyed
+    /// by day — no explicit reset needed.
+    ///
+    /// @dev Known trade-off, accepted deliberately: PenaltyEngine.execute() reads
+    /// committedAmount() fresh at whatever moment settle() actually runs for a *past* day, not a
+    /// snapshot from the day that failed. If settle() for a missed day is still pending when the
+    /// user completes today's habits, this reduces the pending count (and so the amount
+    /// penalized) before that backlog is cleared — completing today can partially reduce a
+    /// penalty still owed from an unsettled prior miss. Fine for now (testnet; the opportunistic
+    /// settle-on-every-load/verify calls plus the daily cron keep backlogs rare and small); a
+    /// stricter version would have settle() clear any backlog before crediting today's
+    /// completions against Committed.
+    function pendingHabitCount(address user) external view returns (uint256) {
+        uint256 len = habitCountOf[user];
+        uint256 today = _today();
+        uint256 count = 0;
+        for (uint256 i = 0; i < len; i++) {
+            if (habitActive[user][i] && !completedOn[user][today][i]) count++;
+        }
+        return count;
     }
 
     /// @notice Called by the backend verifier after Gemini returns verified:true for today's proof.

@@ -120,11 +120,15 @@ function HabitRow({
             {metaLine}
           </p>
         )}
+        {/* Moved down onto its own line, under the title/meta, rather than sitting in the
+            shrink-0 action row on the right — it used to eat into that row's fixed width and
+            truncate the title on narrower screens (confirmed live on mobile). */}
+        {showLiveCountdown && (
+          <p className="truncate text-xs font-medium text-warning">{deadline.label}</p>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-        {showLiveCountdown && <span className="text-xs font-medium text-warning">{deadline.label}</span>}
-
         {showUpload ? (
           <button
             onClick={() => setCapturing(true)}

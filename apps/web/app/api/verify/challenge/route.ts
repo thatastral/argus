@@ -4,7 +4,8 @@ import { getSessionWallet } from "@/lib/session";
 import { pickChallenge, signChallengeToken } from "@/lib/verifyChallenge";
 
 const querySchema = z.object({
-  contractIndex: z.coerce.number().int().min(0).max(2),
+  // No upper bound — see the same note in app/api/habits/route.ts's bodySchema.
+  contractIndex: z.coerce.number().int().min(0),
 });
 
 /// Called right before the client opens the live camera — the challenge shown on-screen and the

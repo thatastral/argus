@@ -93,7 +93,7 @@ export function EditHabitModal({
       <ConfirmDialog
         open={confirmingDelete}
         title="Delete habit"
-        description={`Remove "${currentName}"? This can't be undone — habit slots can't be reused once created.`}
+        description={`Delete "${currentName}"? This can't be undone.`}
         confirmLabel="Delete"
         pending={deleting}
         onConfirm={confirmDelete}

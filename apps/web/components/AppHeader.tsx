@@ -103,7 +103,7 @@ export function AppHeader({
           <div className="pointer-events-none absolute right-0 top-full z-10 mt-2 w-56 rounded-xl bg-card p-3 opacity-0 shadow-lg transition-opacity [@media(hover:hover)]:group-hover:opacity-100">
             {walletAddress ? (
               <div className="space-y-2">
-                <p className="text-xs text-muted">Accountability Wallet</p>
+                <p className="text-xs text-muted">Your Wallet</p>
                 <p className="font-mono text-xs text-muted">{truncateAddress(walletAddress)}</p>
                 {balancesLoading ? (
                   <p className="text-xs text-muted">Loading…</p>
@@ -131,7 +131,7 @@ export function AppHeader({
                 )}
               </div>
             ) : (
-              <p className="text-xs text-muted">No vault deployed yet — click to set one up.</p>
+              <p className="text-xs text-muted">No vault yet — click to set one up.</p>
             )}
           </div>
         </div>

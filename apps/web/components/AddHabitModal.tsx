@@ -56,7 +56,7 @@ export function AddHabitModal({ open, onClose, onCreated }: { open: boolean; onC
             </button>
             {busy && (
               <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-                Stuck? Cancel and try again
+                Stuck? Cancel and retry
               </button>
             )}
           </>

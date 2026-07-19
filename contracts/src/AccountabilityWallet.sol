@@ -132,22 +132,28 @@ contract AccountabilityWallet is ReentrancyGuard {
         return asset == address(0) ? address(this).balance : IERC20(asset).balanceOf(address(this));
     }
 
-    /// @notice The user's own configured *per-habit* stake, times how many habits are actually
-    /// active right now, clamped to what's available to cover it. A live view, not stored state
-    /// — see the contract-level doc comment. Multiplying by activeHabitCount matters because a
-    /// single missed day can fail every active habit at once (settle() is pass/fail per day, not
-    /// per habit — see HabitManager._allActiveCompletedOn) and PenaltyEngine.execute() moves this
-    /// entire figure in one shot; a wallet that only ever reserved one habit's worth of stake
-    /// would silently be exposed for more than it showed. Because it's a *standing* commitment
-    /// (configurePenalty isn't a one-shot action) and activeHabitCount can change independently
+    /// @notice The user's own configured *per-habit* stake, times how many active habits are
+    /// still *pending* today (i.e. not yet verified complete — see
+    /// HabitManager.pendingHabitCount), clamped to what's available to cover it. A live view, not
+    /// stored state — see the contract-level doc comment. A completed habit's stake becomes
+    /// withdrawable immediately (moves from Committed to Available with no separate transaction,
+    /// since Available is just balanceOf() minus this) rather than staying reserved until
+    /// midnight — see HabitManager.pendingHabitCount's doc comment for the accepted trade-off
+    /// this introduces against a still-unsettled prior miss.
+    ///
+    /// Multiplying (rather than a flat per-wallet amount) still matters the same way it always
+    /// did: a single missed day can fail every active habit at once (settle() is pass/fail per
+    /// day, not per habit — see HabitManager._allActiveCompletedOn) and PenaltyEngine.execute()
+    /// moves this entire figure in one shot. Because it's a *standing* commitment
+    /// (configurePenalty isn't a one-shot action) and pendingHabitCount can change independently
     /// of any deposit/withdraw, it re-derives itself continuously: e.g. a 0.5-ether-per-habit
-    /// stake across 2 active habits on a 1.5-ether balance that just moved 1 ether into the
-    /// Savings Vault immediately re-commits the same 1 ether from what's left, so
-    /// availableBalance() is 0 until more is deposited — the user stays "at risk" for the next
-    /// day automatically, without a separate re-commit transaction.
+    /// stake across 2 still-pending habits on a 1.5-ether balance that just moved 1 ether into
+    /// the Savings Vault immediately re-commits the same 1 ether from what's left, so
+    /// availableBalance() is 0 until more is deposited — the user stays "at risk" for the rest of
+    /// today automatically, without a separate re-commit transaction.
     function committedAmount() public view returns (uint256) {
         uint256 configured =
-            IPenaltyEngineView(penaltyEngine).penaltyAmountOf(owner) * IHabitManager(habitManager).activeHabitCount(owner);
+            IPenaltyEngineView(penaltyEngine).penaltyAmountOf(owner) * IHabitManager(habitManager).pendingHabitCount(owner);
         uint256 uncommitted = balanceOf() - _lockedSavingsVault();
         return configured > uncommitted ? uncommitted : configured;
     }

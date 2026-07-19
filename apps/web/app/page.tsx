@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAccount, useDisconnect } from "wagmi";
-import { formatUnits } from "viem";
-import { ListChecks, LockSimple, Clock } from "@phosphor-icons/react";
+import { ListChecks, LockSimple } from "@phosphor-icons/react";
 import { LandingScreen } from "@/components/LandingScreen";
 import { SetupFlow } from "@/components/SetupFlow";
 import { HabitList } from "@/components/HabitList";
@@ -17,6 +16,7 @@ import { WelcomeModal, hasSeenWelcome, markWelcomeSeen } from "@/components/Welc
 import { InsightCard } from "@/components/InsightCard";
 import { GlowBackground } from "@/components/GlowBackground";
 import { DotGrid } from "@/components/DotGrid";
+import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { useStreak } from "@/hooks/useStreak";
 import { useCountdownToMidnight } from "@/hooks/useCountdownToMidnight";
 import { computeCountdown } from "@/hooks/useCountdownToDeadline";
@@ -66,6 +66,14 @@ export default function Home() {
   // left" pill can reuse it — same live countdown HabitDayGroups.tsx's TodayStatusPill already
   // shows, just a second consumer of the same hook, not a new computation.
   const timeLeft = useCountdownToMidnight();
+  // Same reasoning: the stat row's "committed" pill used to be derived client-side from the
+  // already-fetched Supabase penalty config (stake × active habit count) — a real, reported
+  // mismatch against the Wallet modal (WalletStatus.tsx), which reads the actual live
+  // committedAmount() on-chain and, since completing a habit now excludes it from that figure
+  // immediately (see AccountabilityWallet.sol), goes stale the moment a habit is completed. This
+  // is the same hook WalletStatus.tsx already uses, so both surfaces now read the identical live
+  // value — not a second, independently-drifting computation.
+  const { committedFormatted, symbol: committedSymbol, balancesLoading: committedLoading } = useAccountabilityWallet();
 
   const loadState = useCallback(async () => {
     const res = await fetch("/api/state");
@@ -185,15 +193,6 @@ export default function Home() {
   const anyMissedToday = allResolvedToday && !allDoneToday;
   const closeOverlay = () => setOverlay(null);
 
-  // Stake × active habit count — same formula AccountabilityWallet.committedAmount() uses
-  // on-chain (see CLAUDE.md), computed here from the already-fetched penalty config rather than
-  // a live wallet read, since this is just a headline number, not something being transacted
-  // against.
-  const committedToday =
-    state.penalty && activeHabitCount > 0
-      ? Number(formatUnits(BigInt(state.penalty.amount_wei), state.penalty.asset_decimals ?? 18)) * activeHabitCount
-      : 0;
-  const committedSymbol = state.penalty?.asset_symbol ?? "MON";
   const insightMessage = computeInsight(state.recentCompletionTimestamps);
 
   return (
@@ -250,18 +249,14 @@ export default function Home() {
                 </>
               )}
               {currentStreak !== undefined && currentStreak > 0 && (
-                <>
-                  {" "}
-                  and you&apos;re on a <span className="text-white">{currentStreak}-day streak</span> which is
-                  highly commendable
-                </>
+                <> and you&apos;re on a <span className="text-white">{currentStreak}-day streak</span></>
               )}
               .{" "}
               {allDoneToday
                 ? "Great work today — see you tomorrow!"
                 : anyMissedToday
                   ? "There's always tomorrow — let's get back on track."
-                  : "Finish up your habits today and build discipline. You've got this!"}
+                  : "Finish up today. You've got this!"}
             </p>
 
             {/* Compact scannable version of the sentence above, not a replacement for it — the
@@ -273,12 +268,14 @@ export default function Home() {
               </span>
               <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium">
                 <LockSimple size={14} weight="bold" className="text-warning" />
-                {committedToday.toFixed(2)} {committedSymbol} committed
+                {committedLoading ? "…" : `${Number(committedFormatted).toFixed(2)} ${committedSymbol} committed`}
               </span>
               {!allResolvedToday && (
-                <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium">
-                  <Clock size={14} weight="bold" className="text-muted" />
-                  {timeLeft} left
+                // Plain grey text, not a pill like the stats around it — a deliberately lower-
+                // attention treatment than the per-habit deadline countdown (HabitDayGroups.tsx),
+                // which stays bold/warning-colored since it's the one that actually needs urgency.
+                <span className="self-center text-xs text-muted">
+                  {timeLeft.replace(/:/g, " ")} REMAINING
                 </span>
               )}
             </div>
@@ -334,7 +331,7 @@ export default function Home() {
       </Modal>
 
       <Modal open={overlay === "wallet"} title="Wallet" onClose={closeOverlay}>
-        <WalletStatus onSignOut={signOut} />
+        <WalletStatus onSignOut={signOut} configuredAssetSymbol={state.penalty?.asset_symbol ?? null} />
       </Modal>
 
       <Modal open={overlay === "streak"} title="Discipline streak" onClose={closeOverlay}>

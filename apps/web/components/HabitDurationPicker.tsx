@@ -78,7 +78,7 @@ export function HabitDurationPicker({
 
       <p className="text-xs text-muted">
         {value === null
-          ? "No end date — keep going indefinitely."
+          ? "No end date — keep going."
           : `Ends ${formatEndDate(value)} (${value} day${value === 1 ? "" : "s"} from today).`}
       </p>
     </div>

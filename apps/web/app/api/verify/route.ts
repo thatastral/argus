@@ -17,7 +17,8 @@ import { verifyChallengeToken } from "@/lib/verifyChallenge";
 const CONFIDENCE_THRESHOLD = 0.8;
 
 const bodySchema = z.object({
-  contractIndex: z.number().int().min(0).max(2),
+  // No upper bound — see the same note in app/api/habits/route.ts's bodySchema.
+  contractIndex: z.number().int().min(0),
   imageBase64: z.string().min(1),
   mimeType: z.string().min(1),
   // Issued by GET /api/verify/challenge right before capture — proves which random gesture was

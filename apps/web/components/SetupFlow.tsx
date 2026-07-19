@@ -16,6 +16,7 @@ import { HabitDeadlineTimePicker } from "./HabitDeadlineTimePicker";
 import { WalletReconnect } from "./WalletReconnect";
 import { DeployWalletForm } from "./DeployWalletForm";
 import { Spinner } from "./Spinner";
+import { WelcomeModal } from "./WelcomeModal";
 import { friendlyErrorMessage } from "@/lib/formatError";
 
 // "penalty" (consequence + per-habit stake) now comes before "wallet" (deploy + fund) and
@@ -51,6 +52,10 @@ export function SetupFlow({
   const [step, setStep] = useState<Step>("profile");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Same "How it works" walkthrough LandingScreen.tsx's header link opens — persistent across
+  // every onboarding step (not just pre-auth), reusing the identical four-step content rather
+  // than duplicating it, per a direct instruction that it should stay reachable through setup too.
+  const [howItWorksOpen, setHowItWorksOpen] = useState(false);
 
   const { writeContractAsync } = useWriteContract();
   const { data: _receipt } = useWaitForTransactionReceipt();
@@ -128,7 +133,7 @@ export function SetupFlow({
   function cancel() {
     cancelledRef.current = true;
     setBusy(false);
-    setError("Cancelled — check your wallet extension for a stuck request, then try again.");
+    setError("Cancelled — check your wallet for a stuck request, then try again.");
   }
 
   async function saveProfile() {
@@ -213,9 +218,17 @@ export function SetupFlow({
     <div className="mx-auto w-full max-w-sm space-y-4">
       {step !== "done" && (
         <div className="space-y-1.5">
-          <p className="text-xs text-muted">
-            Step {currentStepNumber} of {totalSteps}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-muted">
+              Step {currentStepNumber} of {totalSteps}
+            </p>
+            <button
+              onClick={() => setHowItWorksOpen(true)}
+              className="text-xs text-muted underline transition-transform duration-150 ease-emil-out hover:text-foreground active:scale-[0.97]"
+            >
+              How it works
+            </button>
+          </div>
           <div className="flex gap-1">
             {Array.from({ length: totalSteps }).map((_, i) => (
               <div
@@ -276,8 +289,7 @@ export function SetupFlow({
             We found {unmirrored.length} existing habit{unmirrored.length === 1 ? "" : "s"} on this wallet
           </label>
           <p className="text-xs text-muted">
-            This wallet already has active habit slots on-chain from before — name each one to bring it into your
-            dashboard.
+            Name each active on-chain habit to bring it into your dashboard.
           </p>
           {unmirrored.map((h) => (
             <input
@@ -324,7 +336,7 @@ export function SetupFlow({
               </button>
               {habitCreation.busy && (
                 <button onClick={habitCreation.cancel} className="w-full text-center text-xs text-muted underline">
-                  Stuck? Cancel and try again
+                  Stuck? Cancel and retry
                 </button>
               )}
               {habitCreation.error && <p className="text-xs text-red-500">{habitCreation.error}</p>}
@@ -371,8 +383,7 @@ export function SetupFlow({
           </div>
           {penaltyType === "savingsVault" ? (
             <p className="text-xs text-muted">
-              A missed day moves your stake into a locked Savings Vault — still yours, released once the lock
-              period passes.
+              Stake goes to Savings Vault — still yours, released after the lock period.
             </p>
           ) : (
             <p className="text-xs text-muted">A missed day sends your stake to Argus, immediately.</p>
@@ -405,10 +416,8 @@ export function SetupFlow({
             </div>
           </div>
           <p className="text-xs text-muted">
-            This also decides what your Accountability Wallet holds — {vaultAsset === "usdc" ? "USDC" : "MON"} in
-            the next step. This amount is charged <span className="text-foreground">per habit</span> — with up to
-            3 active habits, as much as {stakeAmount && !Number.isNaN(Number(stakeAmount)) ? Number(stakeAmount) * 3 : "3×"} {vaultAsset === "usdc" ? "USDC" : "MON"} could be Committed at once if you missed all of them the same day.
-            Everything else you deposit stays freely withdrawable.
+              Sets your wallet&apos;s asset. Charged <span className="text-foreground">per habit</span> — miss all 3 the same day and up to {stakeAmount && !Number.isNaN(Number(stakeAmount)) ? Number(stakeAmount) * 3 : "3×"} {vaultAsset === "usdc" ? "USDC" : "MON"} is at risk.
+              Everything else stays withdrawable.
           </p>
           {(!stakeAmount || Number(stakeAmount) <= 0) && (
             <p className="text-xs text-red-500">
@@ -428,7 +437,7 @@ export function SetupFlow({
               </button>
               {busy && (
                 <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-                  Stuck? Cancel and try again
+                  Stuck? Cancel and retry
                 </button>
               )}
             </>
@@ -438,14 +447,21 @@ export function SetupFlow({
         </div>
       )}
 
-      {step === "wallet" && !walletDeployed && (
+      {/* `walletAddress` (a live on-chain read via useAccountabilityWallet — ArgusFactory
+          .walletOf(user)) always wins over `walletDeployed`'s own session-local state: a user
+          who already has a vault (from a previous completed setup, or from resuming onboarding
+          after leaving mid-flow post-deploy) must never see the deploy form again — clicking
+          Deploy a second time reverts on-chain with ArgusFactory.WalletAlreadyDeployed(),
+          confirmed live. `walletDeployed` only still matters for the brief window right after
+          *this session's own* deploy tx confirms, before the walletAddress read has caught up. */}
+      {step === "wallet" && !walletAddress && !walletDeployed && (
         <div className="space-y-3">
           <label className="block text-sm font-medium text-white/70">Deploy your Accountability Wallet</label>
           <p className="text-xs text-muted">
-            This deploys a vault owned entirely by your wallet address. Argus never holds your funds.
+            Deploys a vault you own. Argus never holds your funds.
           </p>
           <DeployWalletForm
-            defaultAsset={vaultAsset}
+            asset={vaultAsset}
             onDeployed={() => {
               setWalletDeployed(true);
               refetchWalletAddress();
@@ -454,16 +470,15 @@ export function SetupFlow({
         </div>
       )}
 
-      {step === "wallet" && walletDeployed && !walletAddress && (
+      {step === "wallet" && !walletAddress && walletDeployed && (
         <p className="text-center text-sm text-muted">Setting up your vault…</p>
       )}
 
-      {step === "wallet" && walletDeployed && walletAddress && (
+      {step === "wallet" && walletAddress && (
         <div className="space-y-3">
           <label className="block text-sm font-medium text-white/70">Fund your wallet</label>
           <p className="text-xs text-muted">
-            Deposit at least {stakeAmount} {vaultSymbol} — your habit&apos;s stake — before creating a habit, so
-            you&apos;re never uploading proof with nothing actually at risk.
+            Deposit at least {stakeAmount} {vaultSymbol} — your habit&apos;s stake — so proof always has real weight.
           </p>
           <div className="flex gap-2">
             <input
@@ -505,6 +520,8 @@ export function SetupFlow({
       {step === "done" && <p className="text-center text-sm text-muted">All set — loading your dashboard…</p>}
 
       {error && <p className="text-xs text-red-500">{error}</p>}
+
+      <WelcomeModal open={howItWorksOpen} onClose={() => setHowItWorksOpen(false)} />
     </div>
   );
 }

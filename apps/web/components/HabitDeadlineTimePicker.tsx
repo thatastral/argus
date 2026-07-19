@@ -40,7 +40,7 @@ export function HabitDeadlineTimePicker({
         )}
       </div>
       <p className="text-xs text-muted">
-        {value ? `Complete this habit by ${formatTime12h(value)} each day.` : "No specific time — any time during the day works."}
+        {value ? `Complete this habit by ${formatTime12h(value)} each day.` : "No set time — any time during the day works."}
       </p>
     </div>
   );

@@ -162,17 +162,14 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
 
       <Modal open={capNoticeOpen} title="3 habits at a time" onClose={() => setCapNoticeOpen(false)}>
         <p className="text-sm text-muted">
-          You&apos;ve got {MAX_HABITS} active habits already — that&apos;s the most Argus tracks at once. Tap the
-          pencil icon on one of today&apos;s habits and delete it to free up a slot right away, then add your new
-          one — no need to wait for tomorrow.
+          You have {MAX_HABITS} active habits — the max Argus tracks. Tap the pencil on a habit and delete it to free a slot, then add your new one.
         </p>
       </Modal>
 
       <Modal open={fundsNoticeOpen} title="Not enough available balance" onClose={() => setFundsNoticeOpen(false)}>
         <p className="text-sm text-muted">
-          Another habit needs {stakeLabel} available to cover its stake — you currently have{" "}
-          {Number(availableFormatted).toFixed(4)} {walletAddress ? symbol : "MON"} available. Deposit more from the
-          Wallet modal, then try again.
+          Another habit needs {stakeLabel} available. You have{" "}
+          {Number(availableFormatted).toFixed(4)} {walletAddress ? symbol : "MON"}. Deposit more from Wallet, then try again.
         </p>
       </Modal>
     </div>

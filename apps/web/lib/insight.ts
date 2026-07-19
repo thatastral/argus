@@ -16,7 +16,7 @@ function formatHour(hour24: number): string {
 /// useCountdownToDeadline.ts's computeCountdown being a plain function called from the client.
 export function computeInsight(recentVerifiedTimestamps: string[]): string {
   if (recentVerifiedTimestamps.length < MIN_SAMPLES) {
-    return "Complete a few more habits and Argus will start noticing your patterns.";
+    return "Complete more habits and Argus will learn your patterns.";
   }
 
   const hours = recentVerifiedTimestamps.map((iso) => new Date(iso).getHours());
@@ -25,10 +25,10 @@ export function computeInsight(recentVerifiedTimestamps: string[]): string {
   const label = formatHour(roundedHour);
 
   if (roundedHour >= 18) {
-    return `You usually complete habits around ${label} — try starting a bit earlier today.`;
+    return `You usually finish around ${label} — try starting earlier today.`;
   }
   if (roundedHour < 10) {
-    return `You're an early completer — usually done by around ${label}. Keep that momentum going.`;
+    return `You're an early finisher — usually done by ${label}. Keep it up.`;
   }
   return `You usually complete habits around ${label}.`;
 }

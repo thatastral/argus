@@ -100,7 +100,7 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
       >
         {!isConnected ? (
           connectors.length === 0 ? (
-            <p className="text-sm text-muted">No wallet found — install MetaMask or Rabby.</p>
+            <p className="text-sm text-muted">No wallet found. Install MetaMask or Rabby.</p>
           ) : (
             <div className="flex flex-col gap-2">
               {connectors.map((connector) => {
@@ -145,8 +145,7 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
                 // force a fresh account picker, but that only works for wallets that implement
                 // EIP-2255.
                 <p className="px-1 pt-1 text-center text-xs text-muted">
-                  Still seeing the same address? Revoke this site&apos;s access in your wallet&apos;s settings to
-                  pick a different one.
+                  Still see the same address? Revoke site access in your wallet settings.
                 </p>
               )}
             </div>
@@ -168,7 +167,7 @@ export function ConnectButton({ onSignedIn }: { onSignedIn: (wallet: string) => 
             {onWrongChain ? (
               <div className="flex w-full flex-col items-center gap-2">
                 <p className="text-xs text-muted">
-                  Your wallet is on the wrong network — Argus runs on {activeChain.name}.
+                  Wrong network — Argus runs on {activeChain.name}.
                 </p>
                 <button
                   onClick={() =>

@@ -4,7 +4,13 @@ import { getSessionWallet } from "@/lib/session";
 import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 
 const bodySchema = z.object({
-  contractIndex: z.number().int().min(0).max(2),
+  // No upper bound — MAX_HABITS (3) gates *active* habits on-chain, not the lifetime index.
+  // habitCountOf only ever grows and a deactivated index is never reused (see CLAUDE.md's
+  // 3-habit-cap gotcha), so a wallet that has created/deleted a handful of habits over time will
+  // legitimately reach index 3, 4, 5... — capping this at 2 made every one of those permanently
+  // unmirrorable (confirmed live: a stuck, non-dismissible "Existing habits found" recovery modal
+  // that could never actually save, since the on-chain habit's real index was already past 2).
+  contractIndex: z.number().int().min(0),
   name: z.string().min(1).max(64),
   // Off-chain-only, informational (see CLAUDE.md/migration 0002) — omit entirely to leave an
   // existing value untouched (used by the rename path, useRenameHabit.ts), pass null for "no
@@ -106,7 +112,8 @@ export async function GET() {
 }
 
 const patchSchema = z.object({
-  contractIndex: z.number().int().min(0).max(2),
+  // See the same no-upper-bound note on bodySchema above.
+  contractIndex: z.number().int().min(0),
 });
 
 /// Mirrors HabitManager.setHabitActive(index, false) after the on-chain tx confirms — see

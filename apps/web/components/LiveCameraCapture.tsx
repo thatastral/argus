@@ -106,8 +106,8 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
     setLive(false);
   }
 
-  // Fetches a fresh challenge + enumerates devices once, on mount; stops the stream on unmount
-  // (component only exists while the caller wants it open — see the no-`open`-prop note above).
+  // Fetches a fresh challenge once, on mount; stops the stream on unmount (component only exists
+  // while the caller wants it open — see the no-`open`-prop note above).
   useEffect(() => {
     let cancelled = false;
 
@@ -118,16 +118,6 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
       })
       .catch(() => {
         if (!cancelled) setCameraError("other");
-      });
-
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        if (!cancelled) setMultipleCameras(devices.filter((d) => d.kind === "videoinput").length > 1);
-      })
-      .catch(() => {
-        // Device labels/count may be limited before permission is granted on some browsers —
-        // harmless, the flip button just won't show.
       });
 
     return () => {
@@ -153,6 +143,21 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
         if (videoRef.current) videoRef.current.srcObject = stream;
         setCameraError(null);
         setLive(true);
+
+        // Enumerate only after permission is actually granted — browsers (iOS Safari
+        // especially) anonymize/limit device info pre-permission, sometimes reporting only one
+        // generic "camera" entry even on a phone with both front and back cameras. Confirmed
+        // live as the Flip button silently never showing on mobile. Post-permission enumeration
+        // reliably reports real labels/counts, so this re-checks every time a stream opens
+        // (including after a flip) rather than once at mount.
+        navigator.mediaDevices
+          .enumerateDevices()
+          .then((devices) => {
+            if (!cancelled) setMultipleCameras(devices.filter((d) => d.kind === "videoinput").length > 1);
+          })
+          .catch(() => {
+            // Harmless — the flip button just won't show.
+          });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -223,7 +228,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
 
   function handleUploadedFile(file: File) {
     if (file.size > MAX_PROOF_FILE_BYTES) {
-      setSubmitError("That image is too large — try one under 8MB.");
+      setSubmitError("Image too large — try one under 8MB.");
       return;
     }
     const reader = new FileReader();
@@ -237,7 +242,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
 
   function handleAppSummaryFile(file: File) {
     if (file.size > MAX_PROOF_FILE_BYTES) {
-      setSubmitError("That image is too large — try one under 8MB.");
+      setSubmitError("Image too large — try one under 8MB.");
       return;
     }
     const reader = new FileReader();
@@ -317,8 +322,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
         {cameraError === "denied" && (
           <div className="space-y-2 text-center">
             <p className="text-sm text-muted">
-              Camera access was denied. Allow camera access in your browser settings and try again, or upload a
-              fresh photo showing the check above instead.
+              Camera denied. Allow access in browser settings, or upload a photo showing the challenge above.
             </p>
             <div className="flex items-center justify-center gap-2">
               <button onClick={() => setCameraError(null)} className={`rounded-md bg-surface px-3 py-2 text-sm ${PRESS_FEEDBACK}`}>
@@ -333,7 +337,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
 
         {cameraError === "no-device" && (
           <div className="space-y-2 text-center">
-            <p className="text-sm text-muted">No camera detected on this device — upload a fresh photo instead.</p>
+            <p className="text-sm text-muted">No camera detected — upload a photo instead.</p>
             <button onClick={() => fileInputRef.current?.click()} className={`rounded-md bg-surface px-3 py-2 text-sm ${PRESS_FEEDBACK}`}>
               Choose photo
             </button>
@@ -342,7 +346,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
 
         {cameraError === "other" && (
           <div className="space-y-2 text-center">
-            <p className="text-sm text-muted">Couldn&apos;t start the camera — try again, or upload a photo instead.</p>
+            <p className="text-sm text-muted">Couldn&apos;t start camera — try again or upload a photo.</p>
             <div className="flex items-center justify-center gap-2">
               <button onClick={() => setCameraError(null)} className={`rounded-md bg-surface px-3 py-2 text-sm ${PRESS_FEEDBACK}`}>
                 Try again
@@ -407,7 +411,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
             <ProofOptionButton
               icon={<ImageIcon size={18} weight="bold" />}
               label="Upload a photo instead"
-              detail="Using the camera gets approved faster."
+              detail="Camera uploads get approved faster."
               onClick={() => fileInputRef.current?.click()}
             />
             <ProofOptionButton
@@ -420,7 +424,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
         )}
 
         {capturedDataUrl && !resultMessage && proofType === "appSummary" && (
-          <p className="text-center text-xs text-muted">Submitting as an app summary — no gesture check needed.</p>
+          <p className="text-center text-xs text-muted">Submitting as app summary — no gesture check.</p>
         )}
 
         {capturedDataUrl && !resultMessage && (

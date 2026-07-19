@@ -54,8 +54,7 @@ export function LandingScreen({ onSignedIn }: { onSignedIn: (wallet: string) => 
             Keep your word.
           </h1>
           <p className="text-sm text-muted sm:text-base">
-            Argus is a non-custodial accountability wallet — stake funds on your own habits, and
-            you decide where a missed day&apos;s money goes.
+            Stake funds on your habits. Miss a day, you decide where the money goes.
           </p>
         </div>
 
@@ -65,7 +64,7 @@ export function LandingScreen({ onSignedIn }: { onSignedIn: (wallet: string) => 
       </main>
 
       <footer className="relative z-10 py-4 text-center text-xs text-muted">
-        © 2026 Argus — Built on Monad testnet.
+        © 2026 Argus · Monad testnet
       </footer>
 
       <WelcomeModal open={howItWorksOpen} onClose={() => setHowItWorksOpen(false)} />

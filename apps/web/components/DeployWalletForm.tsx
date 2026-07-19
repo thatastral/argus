@@ -10,21 +10,31 @@ import { Tooltip } from "./Tooltip";
 import { useToast } from "./Toast";
 import { friendlyErrorMessage } from "@/lib/formatError";
 
-/// Asset choice + deploy button for a user's AccountabilityWallet. Shared between SetupFlow's
-/// wallet step (first-time setup) and WalletStatus's recovery path (an Easy Mode user who
-/// created a habit but never finished deploying a vault — see WalletStatus for why that state
-/// is reachable and needs its own way back in, not just a dead-end message).
+/// Deploy button for a user's AccountabilityWallet. Shared between SetupFlow's wallet step
+/// (first-time setup) and WalletStatus's recovery path (an Easy Mode user who created a habit
+/// but never finished deploying a vault — see WalletStatus for why that state is reachable and
+/// needs its own way back in, not just a dead-end message).
+///
+/// `asset` is a required, already-decided choice — not a picker. It used to be an independently
+/// changeable "defaultAsset" here, which meant a user could configure their stake in MON during
+/// the penalty step and then click USDC here, deploying a vault whose real asset didn't match
+/// the decimals `configurePenalty()` already parsed the stake amount with. PenaltyEngine stores
+/// only a raw wei number with no unit metadata — AccountabilityWallet.committedAmount() would
+/// then read that MON-scaled figure (e.g. 0.5 MON = 5e17) as if it were USDC (6 decimals), i.e.
+/// 500 billion USDC, permanently clamping committedAmount() to the entire vault balance and
+/// zeroing availableBalance() for good. The asset is decided once, during the penalty step
+/// (SetupFlow.tsx's `vaultAsset`) or already on record in Supabase's `penalty_configs.asset_symbol`
+/// (WalletStatus.tsx's recovery path) — this component only ever confirms and deploys it.
 export function DeployWalletForm({
   onDeployed,
-  defaultAsset = "mon",
+  asset: vaultAsset,
 }: {
   onDeployed: () => void;
-  defaultAsset?: "mon" | "usdc";
+  asset: "mon" | "usdc";
 }) {
   const { isConnected } = useAccount();
   const { writeContractAsync } = useWriteContract();
   const toast = useToast();
-  const [vaultAsset, setVaultAsset] = useState<"mon" | "usdc">(defaultAsset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cancelledRef = useRef(false);
@@ -32,7 +42,7 @@ export function DeployWalletForm({
   function cancel() {
     cancelledRef.current = true;
     setBusy(false);
-    setError("Cancelled — check your wallet extension for a stuck request, then try again.");
+    setError("Cancelled — check your wallet for a stuck request, then try again.");
   }
 
   async function deploy() {
@@ -66,27 +76,11 @@ export function DeployWalletForm({
 
   return (
     <div className="space-y-3">
-      <Tooltip label="A vault only ever holds one asset, fixed at deploy time — pick whichever you&apos;ll actually fund it with.">
-        <span className="text-xs text-muted underline decoration-dotted">What&apos;s this?</span>
-      </Tooltip>
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => setVaultAsset("mon")}
-          className={`rounded-md px-3 py-2 text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] ${
-            vaultAsset === "mon" ? "bg-foreground text-background" : "bg-surface"
-          }`}
-        >
-          MON
-        </button>
-        <button
-          onClick={() => setVaultAsset("usdc")}
-          disabled={!addresses.usdc}
-          className={`rounded-md px-3 py-2 text-sm transition-transform duration-150 ease-emil-out active:scale-[0.97] disabled:opacity-40 ${
-            vaultAsset === "usdc" ? "bg-foreground text-background" : "bg-surface"
-          }`}
-        >
-          USDC
-        </button>
+      <div className="flex items-center justify-between rounded-md bg-surface px-3 py-2">
+        <span className="text-sm">Funding asset</span>
+        <Tooltip label="Fixed by your penalty step's choice — matches the decimals your stake amount was already parsed with, can't be changed here.">
+          <span className="text-sm font-medium underline decoration-dotted">{vaultAsset === "usdc" ? "USDC" : "MON"}</span>
+        </Tooltip>
       </div>
 
       <button
@@ -99,7 +93,7 @@ export function DeployWalletForm({
       </button>
       {busy && (
         <button onClick={cancel} className="w-full text-center text-xs text-muted underline">
-          Stuck? Cancel and try again
+          Stuck? Cancel and retry
         </button>
       )}
       {error && <p className="text-xs text-red-500">{error}</p>}

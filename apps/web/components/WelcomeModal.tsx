@@ -9,22 +9,22 @@ const STEPS = [
   {
     icon: Eye,
     title: "Habits you actually keep",
-    body: "Create habits, then prove you did them with a live photo or an app-generated summary — Gemini verifies it, no manual review.",
+    body: "Create a habit, prove it with a photo or screenshot — AI checks instantly.",
   },
   {
     icon: Wallet,
     title: "Your own funds, at real risk",
-    body: "You commit a stake per habit from a wallet only you control — Argus never custodies your funds, only what you've explicitly staked is ever governed.",
+    body: "Stake from your wallet — only what you stake is at risk.",
   },
   {
     icon: ShieldCheck,
     title: "Miss a day, real consequence",
-    body: "Miss a habit and your stake either locks in a Savings Vault (still yours, released later) or goes to Argus — your choice, set in Settings.",
+    body: "Miss a day: stake gets locked or donated — you choose in Settings.",
   },
   {
     icon: CheckCircle,
     title: "Argus explains it all",
-    body: "Chat with Argus anytime for your streak, wallet breakdown, or to create/edit habits and move funds — it always asks you to confirm before anything happens.",
+    body: "Chat about your progress, habits, or funds — Argus always asks first.",
   },
 ] as const;
 
@@ -51,7 +51,7 @@ export function WelcomeModal({ open, onClose }: { open: boolean; onClose: () => 
   return (
     <Modal open={open} title="Welcome to Argus" onClose={onClose}>
       <div className="space-y-5">
-        <p className="text-sm text-muted">A quick look at how accountability actually works here.</p>
+        <p className="text-sm text-muted">How accountability works.</p>
         <div className="space-y-4">
           {STEPS.map(({ icon: Icon, title, body }) => (
             <div key={title} className="flex items-start gap-3">

@@ -22,3 +22,5 @@ contracts/lib/
 .DS_Store
 *.log
 .turbo/
+.vercel
+.env*

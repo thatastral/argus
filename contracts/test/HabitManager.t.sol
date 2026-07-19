@@ -25,6 +25,32 @@ contract HabitManagerTest is ArgusTestBase {
         vm.stopPrank();
     }
 
+    /// The 3-habit cap gates *active* habits (_activeCount), not *pending* ones
+    /// (pendingHabitCount, added for committedAmount() — see AccountabilityWallet.sol) — a habit
+    /// completed today is still active, still occupies one of the 3 slots, and must still block
+    /// a 4th create. Only setHabitActive(index, false) ever frees a slot; completing one never
+    /// does. Explicit regression guard per a direct instruction after pendingHabitCount was added,
+    /// since it would be a real bug for createHabit()'s cap to accidentally start reading it too.
+    function test_createHabit_revertsAfterMax_evenWithSomeCompletedToday() public {
+        vm.startPrank(user);
+        habitManager.createHabit(); // index 0
+        habitManager.createHabit(); // index 1
+        habitManager.createHabit(); // index 2 — 3 active, MAX_HABITS
+        vm.stopPrank();
+
+        vm.startPrank(verifier);
+        habitManager.completeHabit(user, 0);
+        habitManager.completeHabit(user, 1);
+        vm.stopPrank();
+
+        // Only 1 of the 3 is still pending today, but all 3 are still active — must still revert.
+        assertEq(habitManager.pendingHabitCount(user), 1);
+        assertEq(habitManager.activeHabitCount(user), 3);
+        vm.prank(user);
+        vm.expectRevert(HabitManager.TooManyHabits.selector);
+        habitManager.createHabit();
+    }
+
     function test_createHabit_deactivatingFreesASlot() public {
         vm.startPrank(user);
         habitManager.createHabit();
