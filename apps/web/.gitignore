@@ -37,6 +37,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# local debug scripts (may contain hardcoded session tokens/cookies)
+screenshot-auth.mjs
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
