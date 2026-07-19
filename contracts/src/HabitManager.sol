@@ -21,6 +21,11 @@ contract HabitManager is Ownable {
 
     mapping(address => uint256) public habitCountOf;
     mapping(address => mapping(uint256 => bool)) public habitActive;
+    // Locked in at createHabit() time, per direct instruction — changing your stake in Settings
+    // must never retroactively change what an already-existing habit has at risk. Immutable once
+    // set; there is no updateHabitStake()/similar. To change a habit's stake, deactivate it and
+    // create a new one.
+    mapping(address => mapping(uint256 => uint256)) public habitStake;
     // user => day => habitIndex => completed
     mapping(address => mapping(uint256 => mapping(uint256 => bool))) public completedOn;
 
@@ -33,7 +38,7 @@ contract HabitManager is Ownable {
     mapping(address => uint256) public startDay;
     mapping(address => uint256) public nextSettleDay;
 
-    event HabitCreated(address indexed user, uint256 indexed index);
+    event HabitCreated(address indexed user, uint256 indexed index, uint256 stakeAmount);
     event HabitActiveSet(address indexed user, uint256 indexed index, bool active);
     event HabitCompleted(address indexed user, uint256 indexed index, uint256 day);
     event DaySettled(address indexed user, uint256 indexed day, bool success, uint256 newStreak);
@@ -41,6 +46,7 @@ contract HabitManager is Ownable {
     event FactorySet(address factory);
 
     error TooManyHabits();
+    error ZeroStake();
     error InvalidHabitIndex();
     error NotVerifier();
     error NotFactory();
@@ -79,11 +85,20 @@ contract HabitManager is Ownable {
     /// over a long enough time will make _activeCount's loop (and settle()'s) gradually more
     /// expensive. Fine at hackathon scale (realistically dozens of creates, not thousands);
     /// would need real slot reuse or an append cap for sustained heavy usage.
-    function createHabit() external {
+    ///
+    /// `stakeAmount` is locked in for this habit's lifetime the moment it's created — a direct
+    /// instruction that changing your stake later (there's no wallet-level "current stake"
+    /// anymore, see pendingStake() below) must never retroactively change an existing habit's
+    /// exposure. Denominated in whatever units the caller's AccountabilityWallet's asset uses
+    /// (wei for native MON, the token's own smallest unit for an ERC-20) — this contract has no
+    /// opinion on decimals, same as every other raw amount it handles.
+    function createHabit(uint256 stakeAmount) external {
         if (_activeCount(msg.sender) >= MAX_HABITS) revert TooManyHabits();
+        if (stakeAmount == 0) revert ZeroStake();
 
         uint256 index = habitCountOf[msg.sender];
         habitActive[msg.sender][index] = true;
+        habitStake[msg.sender][index] = stakeAmount;
         habitCountOf[msg.sender] = index + 1;
 
         if (index == 0) {
@@ -92,7 +107,7 @@ contract HabitManager is Ownable {
             nextSettleDay[msg.sender] = today; // today itself is not owed until tomorrow
         }
 
-        emit HabitCreated(msg.sender, index);
+        emit HabitCreated(msg.sender, index, stakeAmount);
     }
 
     function setHabitActive(uint256 index, bool active) external {
@@ -111,29 +126,31 @@ contract HabitManager is Ownable {
         return _activeCount(user);
     }
 
-    /// @notice Active habits not yet verified complete today — what AccountabilityWallet reads
-    /// (instead of activeHabitCount) to scale Committed, so a habit's stake becomes withdrawable
-    /// the moment it's completed for the day rather than staying reserved until midnight. Flips
-    /// back to "pending" automatically at the next UTC day boundary, since completedOn is keyed
-    /// by day — no explicit reset needed.
+    /// @notice Sum of each active-and-not-yet-completed-today habit's own locked-in stake —
+    /// what AccountabilityWallet.committedAmount() reads directly (no more wallet-level
+    /// "penaltyAmountOf × count"; see PenaltyEngine.sol, which lost its `amount` entirely once
+    /// stake moved here). A habit's stake stops counting the moment it's completed for the day,
+    /// so it becomes withdrawable immediately rather than staying reserved until midnight — and
+    /// flips back to "pending" automatically at the next UTC day boundary, since completedOn is
+    /// keyed by day, no explicit reset needed.
     ///
     /// @dev Known trade-off, accepted deliberately: PenaltyEngine.execute() reads
     /// committedAmount() fresh at whatever moment settle() actually runs for a *past* day, not a
     /// snapshot from the day that failed. If settle() for a missed day is still pending when the
-    /// user completes today's habits, this reduces the pending count (and so the amount
-    /// penalized) before that backlog is cleared — completing today can partially reduce a
-    /// penalty still owed from an unsettled prior miss. Fine for now (testnet; the opportunistic
+    /// user completes today's habits, this reduces pendingStake (and so the amount penalized)
+    /// before that backlog is cleared — completing today can partially reduce a penalty still
+    /// owed from an unsettled prior miss. Fine for now (testnet; the opportunistic
     /// settle-on-every-load/verify calls plus the daily cron keep backlogs rare and small); a
     /// stricter version would have settle() clear any backlog before crediting today's
     /// completions against Committed.
-    function pendingHabitCount(address user) external view returns (uint256) {
+    function pendingStake(address user) external view returns (uint256) {
         uint256 len = habitCountOf[user];
         uint256 today = _today();
-        uint256 count = 0;
+        uint256 sum = 0;
         for (uint256 i = 0; i < len; i++) {
-            if (habitActive[user][i] && !completedOn[user][today][i]) count++;
+            if (habitActive[user][i] && !completedOn[user][today][i]) sum += habitStake[user][i];
         }
-        return count;
+        return sum;
     }
 
     /// @notice Called by the backend verifier after Gemini returns verified:true for today's proof.

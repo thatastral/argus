@@ -18,10 +18,10 @@ contract PenaltyEngineTest is ArgusTestBase {
         wallet.deposit{value: 1 ether}();
 
         vm.prank(user);
-        penaltyEngine.configurePenalty(penaltyType, amount);
+        penaltyEngine.configurePenalty(penaltyType);
 
         vm.prank(user);
-        habitManager.createHabit();
+        habitManager.createHabit(amount);
         // never completed -> day fails
 
         vm.warp(block.timestamp + 1 days);
@@ -35,11 +35,12 @@ contract PenaltyEngineTest is ArgusTestBase {
         // Funds never leave the wallet — SavingsVault re-earmarks them, it isn't a transfer.
         assertEq(wallet.balanceOf(), 1 ether);
         assertEq(wallet.savingsVaultAmount(), 0.5 ether);
-        // The configured stake (0.5 ether) is a standing commitment, not a one-time thing — it
-        // immediately re-commits from whatever's left (the other 0.5 ether) so the user stays
-        // "at risk" going forward, which is why availableBalance is 0 here rather than 0.5: the
-        // balance is now fully accounted for between what's locked and what's freshly committed
-        // again. See test_savingsVault_reCommitsStakeFromRemainingBalance for this in isolation.
+        // The habit's locked-in stake (0.5 ether) is a standing commitment, not a one-time
+        // thing — it immediately re-commits from whatever's left (the other 0.5 ether) so the
+        // user stays "at risk" going forward, which is why availableBalance is 0 here rather
+        // than 0.5: the balance is now fully accounted for between what's locked and what's
+        // freshly committed again. See test_savingsVault_reCommitsStakeFromRemainingBalance for
+        // this in isolation.
         assertEq(wallet.availableBalance(), 0);
     }
 
@@ -70,18 +71,18 @@ contract PenaltyEngineTest is ArgusTestBase {
 
     function test_donate_movesFullMultiHabitAmount() public {
         // The scenario this fix exists for: 3 active habits, all missed on the same day (settle
-        // is pass/fail per day, not per habit) — the moved amount must be stakePerHabit * 3, not
-        // just one habit's worth.
+        // is pass/fail per day, not per habit) — the moved amount must be the sum of all 3
+        // habits' own stakes, not just one habit's worth.
         AccountabilityWallet wallet = deployWalletFor(user, address(0));
         vm.deal(user, 1 ether);
         vm.prank(user);
         wallet.deposit{value: 1 ether}();
 
         vm.startPrank(user);
-        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate, 0.1 ether);
-        habitManager.createHabit();
-        habitManager.createHabit();
-        habitManager.createHabit();
+        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate);
+        habitManager.createHabit(0.1 ether);
+        habitManager.createHabit(0.1 ether);
+        habitManager.createHabit(0.1 ether);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 1 days);
@@ -100,10 +101,10 @@ contract PenaltyEngineTest is ArgusTestBase {
         wallet.deposit{value: 0.2 ether}();
 
         vm.startPrank(user);
-        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate, 0.1 ether);
-        habitManager.createHabit();
-        habitManager.createHabit();
-        habitManager.createHabit();
+        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.Donate);
+        habitManager.createHabit(0.1 ether);
+        habitManager.createHabit(0.1 ether);
+        habitManager.createHabit(0.1 ether);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 1 days);
@@ -119,10 +120,11 @@ contract PenaltyEngineTest is ArgusTestBase {
     }
 
     function test_execute_skipsWhenNoWalletDeployed() public {
-        // configurePenalty and a habit exist, but the user never called deployWallet().
+        // A habit (with its own locked-in stake) exists, but the user never called
+        // deployWallet().
         vm.startPrank(user);
-        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.SavingsVault, 0.5 ether);
-        habitManager.createHabit();
+        penaltyEngine.configurePenalty(PenaltyEngine.PenaltyType.SavingsVault);
+        habitManager.createHabit(0.5 ether);
         vm.stopPrank();
 
         vm.warp(block.timestamp + 1 days);
@@ -132,11 +134,12 @@ contract PenaltyEngineTest is ArgusTestBase {
         assertEq(habitManager.totalDaysSettled(user), 1);
     }
 
-    function test_execute_skipsWhenNoPenaltyConfigured() public {
+    function test_execute_skipsWhenNoBalanceDeposited() public {
+        // A vault exists and a habit has a real locked-in stake, but nothing was ever deposited
+        // — committedAmount() clamps to the actual balance (0), so there's nothing to move.
         deployWalletFor(user, address(0));
         vm.prank(user);
-        habitManager.createHabit();
-        // configurePenalty never called -> penaltyAmountOf(user) == 0 -> committedAmount() == 0
+        habitManager.createHabit(0.5 ether);
 
         vm.warp(block.timestamp + 1 days);
 

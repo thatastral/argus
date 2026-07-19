@@ -13,6 +13,11 @@ import {IAccountabilityWallet} from "./interfaces/IAccountabilityWallet.sol";
 /// committedAmount() view (not stored here) so it's automatically clamped to whatever the
 /// vault can actually cover — see AccountabilityWallet.sol's doc comment on why committed is
 /// a live view rather than mutable state kept in sync by hand.
+///
+/// Only tracks *type* now (SavingsVault vs Donate), a single wallet-level choice applying
+/// uniformly to any day's failure. The per-habit stake amount this used to also store here
+/// (`penaltyAmountOf`) moved to HabitManager.habitStake — each habit locks in its own stake at
+/// creation, so there is no more single "amount" for a whole wallet to configure.
 contract PenaltyEngine is Ownable {
     enum PenaltyType {
         SavingsVault,
@@ -28,9 +33,8 @@ contract PenaltyEngine is Ownable {
     address public donationAddress;
 
     mapping(address => PenaltyType) public penaltyTypeOf;
-    mapping(address => uint256) public penaltyAmountOf;
 
-    event PenaltyConfigured(address indexed user, PenaltyType penaltyType, uint256 amount);
+    event PenaltyConfigured(address indexed user, PenaltyType penaltyType);
     event PenaltyExecuted(address indexed user, PenaltyType resolvedType, address recipient, uint256 amount);
     event PenaltySkipped(address indexed user, string reason);
 
@@ -67,12 +71,13 @@ contract PenaltyEngine is Ownable {
         donationAddress = _donationAddress;
     }
 
-    /// @notice Users configure their own consequence and the amount at stake per missed day.
-    function configurePenalty(PenaltyType penaltyType, uint256 amount) external {
+    /// @notice Users configure their own consequence for a missed day — Savings Vault or Donate.
+    /// The amount at stake is no longer configured here; see HabitManager.createHabit's
+    /// stakeAmount, locked in per-habit.
+    function configurePenalty(PenaltyType penaltyType) external {
         penaltyTypeOf[msg.sender] = penaltyType;
-        penaltyAmountOf[msg.sender] = amount;
 
-        emit PenaltyConfigured(msg.sender, penaltyType, amount);
+        emit PenaltyConfigured(msg.sender, penaltyType);
     }
 
     /// @notice Called by HabitManager exactly once per missed day during settlement.

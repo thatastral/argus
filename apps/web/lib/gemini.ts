@@ -1,6 +1,7 @@
 import "server-only";
 import { GoogleGenAI, Type, createPartFromBase64, createUserContent } from "@google/genai";
 import { type HabitCategory, inferHabitCategory } from "./habitCategory";
+import type { PenaltyType } from "./penalty";
 
 // "gemini-2.5-flash" (a pinned model name) was retired for new API keys/projects — confirmed
 // live via a 404 "no longer available to new users" from the API itself. Using the "-latest"
@@ -195,32 +196,37 @@ describe what you actually see in it if they ask why it was rejected, in additio
 
 You have six tools. Every one only *proposes* an action — it still needs the user's own
 confirmation (and, for on-chain ones, their wallet signature) outside this conversation, so
-always phrase your reply as a confirmation prompt ("I'll create a habit called 'Gym' — confirm
-below to add it."), never as if it's already done. If a single message asks for more than one
-distinct action (e.g. "deposit 1 and commit 0.5 to my stake"), call every relevant tool in the
-same turn instead of only the first one — each gets its own confirmation afterward, so nothing
-needs to be dropped:
-- createHabit — user clearly wants to add a new habit (e.g. "add a habit called Gym"). A user
-  can have at most 3 *active* habits at once — count only "active": true entries in "habits".
-  Deactivating a habit frees that slot immediately, so 3 total habits with fewer than 3 active is
-  NOT at the limit — only refuse and skip the tool if the active count is already 3.
+always phrase your reply as a confirmation prompt ("I'll create a habit called 'Gym' staking 0.5
+MON — confirm below to add it."), never as if it's already done. If a single message asks for
+more than one distinct action (e.g. "deposit 1 and create a habit called Gym staking 0.2"), call
+every relevant tool in the same turn instead of only the first one — each gets its own
+confirmation afterward, so nothing needs to be dropped:
+- createHabit — user clearly wants to add a new habit (e.g. "add a habit called Gym staking 0.5
+  MON"). A user can have at most 3 *active* habits at once — count only "active": true entries in
+  "habits". Deactivating a habit frees that slot immediately, so 3 total habits with fewer than 3
+  active is NOT at the limit — only refuse and skip the tool if the active count is already 3.
+  Every habit needs its own stake amount, locked in permanently at creation (there is no more
+  wallet-level default) — if the user doesn't mention an amount, ask them what to stake instead
+  of guessing a number for a real financial commitment; don't call this tool until you have one.
+  If "wallet.deployed" is false, tell them they need to set one up first. If the requested
+  stakeAmount would exceed "wallet.available", say so plainly instead of proposing an action
+  that will just revert on-chain (same reasoning as withdraw below) — a habit can only ever be
+  created fully backed by real funds.
 - editHabit — user wants to rename an existing habit. "habitName" must clearly match one of the
   active habits in "habits" (case doesn't matter) — if it's ambiguous or doesn't match, ask which
   habit they mean instead of guessing.
 - deactivateHabit — user wants to stop tracking/remove an existing habit. Same habitName-matching
   rule as editHabit.
 - deposit — user wants to add funds to their Accountability Wallet's balance (e.g. "deposit 1
-  MON", "add funds", "top up my wallet"). This only ever increases what's available/committable —
-  it does NOT by itself change how much is committed per habit. If "wallet.deployed" is false,
-  tell them they need to set one up first instead of calling this tool.
-- setStake — user wants to change how much is committed/staked/pledged per habit — the amount
-  actually at risk if a habit is missed (e.g. "commit 0.5 MON", "stake 1 USDC per habit",
-  "increase my penalty to 2", "commit 0.5 MON to my accountability wallet"). This does NOT move
-  any funds by itself — it only sets the per-habit amount that "wallet.committed" scales from
-  (stake × active habit count) going forward. "commit"/"stake"/"pledge" describes this at-risk
-  amount, not a balance transfer — prefer setStake over deposit whenever the user's wording is
-  about committing/staking/pledging rather than plainly adding funds, even if they also mention
-  "wallet" or "accountability wallet" in the same sentence.
+  MON", "add funds", "top up my wallet"). This only ever increases what's available — it does NOT
+  fund or change any habit's own stake. If "wallet.deployed" is false, tell them they need to set
+  one up first instead of calling this tool.
+- setPenaltyType — user wants to change what happens to a missed habit's stake — Savings Vault
+  (locks it, still theirs, released later) or Donate (sends it to Argus immediately). This is a
+  single wallet-level choice applying to every habit's stake uniformly; it does NOT set or change
+  any amount — each habit's own stake is fixed forever at creation (see createHabit above), so
+  "commit"/"stake"/"pledge X" language about an amount is never this tool, only ever createHabit
+  for a new habit. Only call this for "if I miss, donate/save it instead" style requests.
 - withdraw — user wants to take funds out. Only "wallet.available" (not "committed", and not a
   locked Savings Vault amount, which isn't even shown here) can actually be withdrawn — if the
   requested amount would exceed "wallet.available", say so plainly instead of proposing an
@@ -229,14 +235,22 @@ needs to be dropped:
 const createHabitDeclaration = {
   name: "createHabit",
   description:
-    "Propose creating a new habit for the user to track. Does not execute anything itself — " +
-    "the user still confirms and signs the actual on-chain transaction client-side.",
+    "Propose creating a new habit for the user to track, with its own stake locked in " +
+    "permanently at creation. Does not execute anything itself — the user still confirms and " +
+    "signs the actual on-chain transaction client-side.",
   parameters: {
     type: Type.OBJECT,
     properties: {
       name: { type: Type.STRING, description: "Short, human-readable habit name, e.g. 'Gym' or 'Read'." },
+      stakeAmount: {
+        type: Type.STRING,
+        description:
+          "The amount to stake on this habit, in the vault's own asset (see wallet.symbol in the " +
+          "data below) — locked in forever once created. Never guess this; only call the tool once " +
+          "the user has stated an amount.",
+      },
     },
-    required: ["name"],
+    required: ["name", "stakeAmount"],
   },
 };
 
@@ -292,22 +306,23 @@ const depositDeclaration = {
   },
 };
 
-const setStakeDeclaration = {
-  name: "setStake",
+const setPenaltyTypeDeclaration = {
+  name: "setPenaltyType",
   description:
-    "Propose changing the amount committed/staked per habit — the amount at risk if a habit is " +
-    "missed. Distinct from deposit: this never moves funds by itself, it only sets the per-habit " +
-    "stake that the Committed balance scales from. Does not execute anything itself — the user " +
-    "still confirms and signs the actual on-chain transaction client-side.",
+    "Propose changing what happens to a missed habit's stake — Savings Vault or Donate. A " +
+    "single wallet-level choice, never an amount (see createHabit for setting a habit's own " +
+    "stake). Does not execute anything itself — the user still confirms and signs the actual " +
+    "on-chain transaction client-side.",
   parameters: {
     type: Type.OBJECT,
     properties: {
-      amount: {
+      penaltyType: {
         type: Type.STRING,
-        description: "The new amount to stake per habit, in the vault's own asset (see wallet.symbol in the data below).",
+        enum: ["savingsVault", "donate"],
+        description: "'savingsVault' (locks the stake, still theirs, released later) or 'donate' (sends it to Argus immediately).",
       },
     },
-    required: ["amount"],
+    required: ["penaltyType"],
   },
 };
 
@@ -332,11 +347,11 @@ const withdrawDeclaration = {
 };
 
 export type ProposedAction =
-  | { type: "create_habit"; name: string }
+  | { type: "create_habit"; name: string; stakeAmount: string }
   | { type: "edit_habit"; habitName: string; newName: string }
   | { type: "deactivate_habit"; habitName: string }
   | { type: "deposit"; amount: string }
-  | { type: "set_stake"; amount: string }
+  | { type: "set_penalty_type"; penaltyType: PenaltyType }
   | { type: "withdraw"; amount: string };
 
 export interface ProgressCoachResult {
@@ -350,15 +365,15 @@ export interface ProgressCoachResult {
 function describeAction(action: ProposedAction): string {
   switch (action.type) {
     case "create_habit":
-      return `create a habit called "${action.name}"`;
+      return `create a habit called "${action.name}" staking ${action.stakeAmount}`;
     case "edit_habit":
       return `rename "${action.habitName}" to "${action.newName}"`;
     case "deactivate_habit":
       return `deactivate "${action.habitName}"`;
     case "deposit":
       return `start a deposit of ${action.amount}`;
-    case "set_stake":
-      return `commit ${action.amount} per habit`;
+    case "set_penalty_type":
+      return `set your consequence to ${action.penaltyType === "donate" ? "Donate" : "Savings Vault"}`;
     case "withdraw":
       return `start a withdrawal of ${action.amount}`;
   }
@@ -408,7 +423,7 @@ export async function progressCoachReply(params: {
             editHabitDeclaration,
             deactivateHabitDeclaration,
             depositDeclaration,
-            setStakeDeclaration,
+            setPenaltyTypeDeclaration,
             withdrawDeclaration,
           ],
         },
@@ -423,8 +438,12 @@ export async function progressCoachReply(params: {
   // rather than failing the whole turn.
   const proposedActions: ProposedAction[] = [];
   for (const call of response.functionCalls ?? []) {
-    if (call.name === "createHabit" && typeof call.args?.name === "string") {
-      proposedActions.push({ type: "create_habit", name: call.args.name });
+    if (
+      call.name === "createHabit" &&
+      typeof call.args?.name === "string" &&
+      typeof call.args?.stakeAmount === "string"
+    ) {
+      proposedActions.push({ type: "create_habit", name: call.args.name, stakeAmount: call.args.stakeAmount });
     } else if (
       call.name === "editHabit" &&
       typeof call.args?.habitName === "string" &&
@@ -435,8 +454,11 @@ export async function progressCoachReply(params: {
       proposedActions.push({ type: "deactivate_habit", habitName: call.args.habitName });
     } else if (call.name === "deposit" && typeof call.args?.amount === "string") {
       proposedActions.push({ type: "deposit", amount: call.args.amount });
-    } else if (call.name === "setStake" && typeof call.args?.amount === "string") {
-      proposedActions.push({ type: "set_stake", amount: call.args.amount });
+    } else if (
+      call.name === "setPenaltyType" &&
+      (call.args?.penaltyType === "savingsVault" || call.args?.penaltyType === "donate")
+    ) {
+      proposedActions.push({ type: "set_penalty_type", penaltyType: call.args.penaltyType });
     } else if (call.name === "withdraw" && typeof call.args?.amount === "string") {
       proposedActions.push({ type: "withdraw", amount: call.args.amount });
     }

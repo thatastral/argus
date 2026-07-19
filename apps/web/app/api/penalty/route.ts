@@ -5,11 +5,11 @@ import { supabaseAdmin, ensureUser } from "@/lib/supabase/server";
 
 const bodySchema = z.object({
   penaltyType: z.enum(["savingsVault", "donate"]),
-  amountWei: z.string().regex(/^[0-9]+$/),
-  // Which asset amountWei is denominated in — required so Settings can format/re-encode it
-  // correctly later, before a vault exists to ask directly (right after this step in setup, the
-  // vault-deploy step hasn't happened yet; see CLAUDE.md/migration 0002). Optional in the schema
-  // only for backward compatibility with any in-flight client that hasn't picked up this field.
+  // Which asset the wallet will hold — still meaningful and still set here (during the
+  // onboarding penalty step, before a vault exists to ask directly — see CLAUDE.md/migration
+  // 0002), even though the *amount* it used to also carry moved to HabitManager.habitStake
+  // (locked in per-habit at creation, see useCreateHabit.ts). Omitted by useSetPenaltyType.ts's
+  // later "just change the consequence type" calls, which leaves whatever was set here alone.
   assetSymbol: z.string().min(1).max(16).optional(),
   assetDecimals: z.number().int().min(0).max(18).optional(),
 });
@@ -34,7 +34,6 @@ export async function POST(request: Request) {
   const payload: Record<string, unknown> = {
     wallet_address: wallet,
     penalty_type: parsed.data.penaltyType,
-    amount_wei: parsed.data.amountWei,
   };
   if (parsed.data.assetSymbol !== undefined) payload.asset_symbol = parsed.data.assetSymbol;
   if (parsed.data.assetDecimals !== undefined) payload.asset_decimals = parsed.data.assetDecimals;

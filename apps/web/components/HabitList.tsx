@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { formatUnits } from "viem";
-import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { useUnmirroredHabits } from "@/hooks/useUnmirroredHabits";
 import { AddHabitModal } from "./AddHabitModal";
 import { EditHabitModal } from "./EditHabitModal";
@@ -21,8 +19,6 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
   const [capNoticeOpen, setCapNoticeOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editing, setEditing] = useState<{ contractIndex: number; name: string } | null>(null);
-  const [fundsNoticeOpen, setFundsNoticeOpen] = useState(false);
-  const { symbol, assetDecimals, walletAddress, availableFormatted } = useAccountabilityWallet();
 
   // Detects a habit that succeeded on-chain but failed to mirror to Supabase (confirmed live —
   // a habit creation attempt in this exact state) — must be resolved via RecoverHabitsModal
@@ -54,26 +50,16 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
     };
   }, [refreshToken]);
 
-  const stakeAmountFormatted =
-    data?.stakeAmountWei != null
-      ? Number(formatUnits(BigInt(data.stakeAmountWei), walletAddress ? assetDecimals : 18))
-      : null;
-  const stakeLabel = stakeAmountFormatted != null ? `${stakeAmountFormatted} ${walletAddress ? symbol : "MON"}` : null;
-
   const hasUnmirrored = Boolean(unmirrored && unmirrored.length > 0);
   const atCap = activeCount !== null && activeCount >= MAX_HABITS;
-  // committedAmount() scales with active habit count (see AccountabilityWallet.sol) — adding one
-  // more habit needs one more habit's worth of stake actually available, or the on-chain
-  // createHabit() would succeed while leaving the vault under-collateralized for its own
-  // configured consequence. Only checked once a stake is actually configured and a vault exists.
-  const insufficientFunds = Boolean(
-    walletAddress && stakeAmountFormatted !== null && Number(availableFormatted) < stakeAmountFormatted,
-  );
   // Only truly disabled (unclickable) while activeCount is still loading (null — defaulting to 0
   // there would briefly let "+ Add Habit" appear enabled for an account already at the cap) or
   // while an unmirrored habit must be resolved first (RecoverHabitsModal, non-dismissible, is
-  // already forced open in that state). At the cap or with insufficient funds, the button stays
-  // clickable so tapping it can explain why via a notice modal, instead of silently doing nothing.
+  // already forced open in that state). At the cap, the button stays clickable so tapping it can
+  // explain why via a notice modal, instead of silently doing nothing. There's no more
+  // pre-emptive "insufficient funds" check here — each habit's stake is now chosen fresh inside
+  // AddHabitModal itself (not a known wallet-level amount ahead of time), which validates that
+  // inline instead.
   const addHabitDisabled = activeCount === null || hasUnmirrored;
 
   return (
@@ -82,11 +68,7 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-light text-white/70">Habits</h2>
           <button
-            onClick={() => {
-              if (atCap) setCapNoticeOpen(true);
-              else if (insufficientFunds) setFundsNoticeOpen(true);
-              else setAddOpen(true);
-            }}
+            onClick={() => (atCap ? setCapNoticeOpen(true) : setAddOpen(true))}
             disabled={addHabitDisabled}
             className={`text-sm font-medium text-white/70 hover:text-foreground disabled:cursor-default disabled:opacity-40 ${PRESS_FEEDBACK}`}
           >
@@ -99,7 +81,6 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
       {!data ? null : (
         <DayGroupsList
           days={data.days}
-          stakeLabel={stakeLabel}
           onVerified={() => {
             load();
             onChange?.();
@@ -163,13 +144,6 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
       <Modal open={capNoticeOpen} title="3 habits at a time" onClose={() => setCapNoticeOpen(false)}>
         <p className="text-sm text-muted">
           You have {MAX_HABITS} active habits — the max Argus tracks. Tap the pencil on a habit and delete it to free a slot, then add your new one.
-        </p>
-      </Modal>
-
-      <Modal open={fundsNoticeOpen} title="Not enough available balance" onClose={() => setFundsNoticeOpen(false)}>
-        <p className="text-sm text-muted">
-          Another habit needs {stakeLabel} available. You have{" "}
-          {Number(availableFormatted).toFixed(4)} {walletAddress ? symbol : "MON"}. Deposit more from Wallet, then try again.
         </p>
       </Modal>
     </div>

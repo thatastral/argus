@@ -3,6 +3,7 @@ import { getSessionWallet } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { publicClient, contractAddresses } from "@/lib/chain";
 import { abis } from "@/lib/contracts";
+import { isWithinHabitDuration } from "@/lib/habitDuration";
 
 // Home screen only ever shows the last 4 days (today + 3) per the "history belongs in its own
 // view" redesign — a longer/unbounded range is available via `?window=full` (HistoryModal.tsx),
@@ -35,19 +36,23 @@ export async function GET(request: Request) {
   const [{ data: habits }, { data: penalty }] = await Promise.all([
     supabase
       .from("habits")
-      .select("contract_index, name, active, target_days, deadline_time, created_at")
+      .select(
+        "contract_index, name, active, target_days, deadline_time, created_at, stake_amount_wei::text, stake_asset_symbol, stake_asset_decimals",
+      )
       .eq("wallet_address", wallet)
+      // Scoped to the currently-configured contract (migration 0008) — redeploying (routine on
+      // this project) resets HabitManager to zero for everyone, so a row left over from a prior
+      // deployment must never bleed into history as an "imaginary" day that never happened on
+      // the current contract, or as a stale "today's habit" that doesn't correspond to anything
+      // real. See app/api/habits/route.ts's POST handler for where this gets tagged.
+      .eq("habit_manager_address", contractAddresses.habitManager ?? "")
       .order("contract_index", { ascending: true }),
-    supabase
-      .from("penalty_configs")
-      .select("penalty_type, amount_wei::text")
-      .eq("wallet_address", wallet)
-      .maybeSingle(),
+    supabase.from("penalty_configs").select("penalty_type").eq("wallet_address", wallet).maybeSingle(),
   ]);
 
   const habitRows = habits ?? [];
   if (habitRows.length === 0) {
-    return NextResponse.json({ days: [], stakeAmountWei: null, penaltyType: null });
+    return NextResponse.json({ days: [], penaltyType: null });
   }
 
   // Don't show history from before the user's first habit — startDay is on-chain (HabitManager
@@ -64,16 +69,28 @@ export async function GET(request: Request) {
       })) as bigint;
       startDay = Number(raw);
     } catch {
-      // If this read fails, fall through with startDay=0 — worst case we show a couple of
-      // extra pre-account days that will just render as "no habits were active" naturally
-      // once we intersect with actual completion rows below.
+      // If this read fails, fall through with startDay=0 — the earliestHabitDayIndex floor
+      // below is what actually keeps this safe (see its comment); without that floor, `full`
+      // mode would otherwise walk the day loop all the way back to the Unix epoch.
     }
   }
   const todayDayIndex = Math.floor(Date.now() / 86_400_000);
 
+  // Defensive floor for the startDay read failing above: no current-contract habit (habitRows is
+  // already scoped by habit_manager_address) can predate its own created_at, so this is a hard
+  // bound regardless of what startDay resolved to. Without it, a failed read defaulting to 0
+  // combined with `full` mode would walk the day loop below back to the Unix epoch (tens of
+  // thousands of iterations) instead of "a couple of extra days" as the on-chain read's own
+  // catch below assumes.
+  const earliestHabitDayIndex = Math.min(
+    ...habitRows.map((h) => Math.floor(new Date(h.created_at).getTime() / 86_400_000)),
+  );
+
   // Full mode (HistoryModal) goes all the way back to startDay; the home screen stays capped at
   // HOME_WINDOW_DAYS regardless of how long ago startDay was.
-  const windowStart = full ? startDay : Math.max(startDay, todayDayIndex - (HOME_WINDOW_DAYS - 1));
+  const windowStart = full
+    ? Math.max(startDay, earliestHabitDayIndex)
+    : Math.max(startDay, earliestHabitDayIndex, todayDayIndex - (HOME_WINDOW_DAYS - 1));
   const dayEntries: { day: string; dayIndex: number }[] = [];
   for (let d = todayDayIndex; d >= windowStart; d--) {
     dayEntries.push({ day: utcDateString(todayDayIndex - d), dayIndex: d });
@@ -103,13 +120,19 @@ export async function GET(request: Request) {
   const today = utcDateString(0);
   const days = dayEntries.map(({ day, dayIndex }) => {
     const isToday = day === today;
-    // A habit belongs on a day if it existed by then (created on or before that day) — this is
-    // what makes a past day's "Missed" status stick even after the habit is later deactivated.
-    // Today is the one exception: it also requires the habit to still be active, since a habit
-    // deactivated today has nothing left to upload proof for and shouldn't show as actionable.
+    // A habit belongs on a day if it existed by then (created on or before that day) and, if it
+    // was only configured to recur for a fixed number of days (targetDays, isWithinHabitDuration
+    // above), that day still falls within that span — a 1-day habit must not keep reappearing on
+    // every later day just because it once existed, which is what "don't automatically repeat
+    // yesterday's habits unless configured to recur for multiple days" actually means for history.
+    // This is what makes a past day's "Missed" status stick even after the habit is later
+    // deactivated. Today is the one exception: it also requires the habit to still be active,
+    // since a habit deactivated today has nothing left to upload proof for and shouldn't show as
+    // actionable.
     const habitsForDay = habitRows.filter((h) => {
       const createdDayIndex = Math.floor(new Date(h.created_at).getTime() / 86_400_000);
       if (createdDayIndex > dayIndex) return false;
+      if (!isWithinHabitDuration(h.created_at, h.target_days, dayIndex)) return false;
       return isToday ? h.active : true;
     });
 
@@ -124,13 +147,18 @@ export async function GET(request: Request) {
         daysRemaining: daysRemaining(h.created_at, h.target_days),
         // Postgres returns `time` as "HH:MM:SS" — trim to "HH:MM" to match what the picker writes.
         deadlineTime: h.deadline_time ? h.deadline_time.slice(0, 5) : null,
+        // Per-habit now (migration 0007) — each habit locked in its own stake at creation and it
+        // never changes, so this repeats the same value on every day row for a given habit
+        // (a habit-level fact, not a per-day one), same pattern targetDays already uses.
+        stakeAmountWei: h.stake_amount_wei,
+        stakeAssetSymbol: h.stake_asset_symbol,
+        stakeAssetDecimals: h.stake_asset_decimals,
       })),
     };
   });
 
   return NextResponse.json({
     days,
-    stakeAmountWei: penalty?.amount_wei ?? null,
     penaltyType: penalty?.penalty_type ?? null,
   });
 }

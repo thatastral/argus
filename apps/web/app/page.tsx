@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAccount, useDisconnect } from "wagmi";
-import { ListChecks, LockSimple } from "@phosphor-icons/react";
+import { Clock, ListChecks, LockSimple } from "@phosphor-icons/react";
 import { LandingScreen } from "@/components/LandingScreen";
 import { SetupFlow } from "@/components/SetupFlow";
 import { HabitList } from "@/components/HabitList";
@@ -271,11 +271,9 @@ export default function Home() {
                 {committedLoading ? "…" : `${Number(committedFormatted).toFixed(2)} ${committedSymbol} committed`}
               </span>
               {!allResolvedToday && (
-                // Plain grey text, not a pill like the stats around it — a deliberately lower-
-                // attention treatment than the per-habit deadline countdown (HabitDayGroups.tsx),
-                // which stays bold/warning-colored since it's the one that actually needs urgency.
-                <span className="self-center text-xs text-muted">
-                  {timeLeft.replace(/:/g, " ")} REMAINING
+                <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium">
+                  <Clock size={14} weight="bold" className="text-muted" />
+                  {timeLeft} left
                 </span>
               )}
             </div>

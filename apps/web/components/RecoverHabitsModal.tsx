@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { UnmirroredHabit } from "@/hooks/useUnmirroredHabits";
+import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { Modal } from "./Modal";
 import { Spinner } from "./Spinner";
 import { useToast } from "./Toast";
@@ -26,6 +27,11 @@ export function RecoverHabitsModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
+  // A deployed vault always exists by the time this modal is reachable (habits can't exist
+  // without one — see the mandatory-funding onboarding gate), so its live asset is authoritative
+  // for mirroring each orphaned habit's real on-chain stake (useUnmirroredHabits.ts already reads
+  // habitStake itself).
+  const { symbol, assetDecimals } = useAccountabilityWallet();
 
   async function save() {
     setSaving(true);
@@ -36,7 +42,14 @@ export function RecoverHabitsModal({
         const res = await fetch("/api/habits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contractIndex: h.contractIndex, name, isNewHabit: true }),
+          body: JSON.stringify({
+            contractIndex: h.contractIndex,
+            name,
+            isNewHabit: true,
+            stakeAmountWei: h.stakeAmountWei,
+            assetSymbol: symbol,
+            assetDecimals,
+          }),
         });
         if (!res.ok) throw new Error("Failed to save a recovered habit — try again");
       }

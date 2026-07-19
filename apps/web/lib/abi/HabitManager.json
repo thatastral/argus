@@ -116,7 +116,13 @@
   {
     "type": "function",
     "name": "createHabit",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "stakeAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -216,6 +222,30 @@
   },
   {
     "type": "function",
+    "name": "habitStake",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "isUnlockedToday",
     "inputs": [
       {
@@ -299,7 +329,7 @@
   },
   {
     "type": "function",
-    "name": "pendingHabitCount",
+    "name": "pendingStake",
     "inputs": [
       {
         "name": "user",
@@ -572,6 +602,12 @@
         "type": "uint256",
         "indexed": true,
         "internalType": "uint256"
+      },
+      {
+        "name": "stakeAmount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -668,6 +704,11 @@
   {
     "type": "error",
     "name": "ZeroAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroStake",
     "inputs": []
   }
 ]

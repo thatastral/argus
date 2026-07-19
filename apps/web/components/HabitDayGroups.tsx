@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { formatUnits } from "viem";
 import { CaretRight, ListChecks, PencilSimple } from "@phosphor-icons/react";
-import { useCountdownToMidnight } from "@/hooks/useCountdownToMidnight";
 import { useCountdownToDeadline, computeCountdown } from "@/hooks/useCountdownToDeadline";
 import { LiveCameraCapture } from "./LiveCameraCapture";
 
@@ -13,6 +13,12 @@ export interface DayHabit {
   targetDays: number | null;
   daysRemaining: number | null;
   deadlineTime: string | null;
+  // Per-habit now (migration 0007) — each habit locks in its own stake at creation and it never
+  // changes, unlike the old single wallet-level amount. Null for a habit created before this
+  // migration (a pre-existing row with nothing to backfill from).
+  stakeAmountWei: string | null;
+  stakeAssetSymbol: string | null;
+  stakeAssetDecimals: number | null;
 }
 
 export interface DayGroup {
@@ -23,7 +29,6 @@ export interface DayGroup {
 
 export interface HistoryResponse {
   days: DayGroup[];
-  stakeAmountWei: string | null;
   penaltyType: string | null;
 }
 
@@ -50,11 +55,6 @@ export function dayLabel(dayStr: string, isToday: boolean) {
   });
 }
 
-function TodayStatusPill() {
-  const countdown = useCountdownToMidnight();
-  return <span className="rounded-full bg-surface px-3 py-1 text-xs font-medium text-warning">{countdown}</span>;
-}
-
 function PastStatusPill({ allCompleted }: { allCompleted: boolean }) {
   return (
     <span
@@ -68,13 +68,11 @@ function PastStatusPill({ allCompleted }: { allCompleted: boolean }) {
 function HabitRow({
   habit,
   isToday,
-  stakeLabel,
   onVerified,
   onEdit,
 }: {
   habit: DayHabit;
   isToday: boolean;
-  stakeLabel: string | null;
   onVerified: () => void;
   onEdit?: () => void;
 }) {
@@ -96,7 +94,9 @@ function HabitRow({
   // One compact line instead of a growing stack — the live countdown (when shown) already
   // covers the deadline, so it isn't repeated here.
   const metaParts: string[] = [];
-  if (stakeLabel) metaParts.push(stakeLabel);
+  if (habit.stakeAmountWei != null && habit.stakeAssetSymbol) {
+    metaParts.push(`${formatUnits(BigInt(habit.stakeAmountWei), habit.stakeAssetDecimals ?? 18)} ${habit.stakeAssetSymbol}`);
+  }
   if (habit.targetDays !== null) {
     metaParts.push(
       habit.daysRemaining !== null && habit.daysRemaining > 0
@@ -149,10 +149,13 @@ function HabitRow({
           </button>
         )}
 
-        {/* A completed habit can't be edited/renamed/deactivated for the day — once it's
-            verified, renaming it would be confusing (no way to tell which name applied when it
-            was proved) and there's nothing left to "fix" about it today anyway. */}
-        {isToday && onEdit && !habit.verified && (
+        {/* Neither a completed nor an already-missed habit can be edited/renamed/deactivated for
+            the day — once verified, renaming would be confusing (no way to tell which name
+            applied when it was proved), and once missed (deadline passed, still unverified),
+            deleting it would let someone dodge a real consequence that's already locked in for
+            today (per a direct instruction). showUpload is exactly "today, unverified, deadline
+            not yet passed" — reused here rather than re-deriving the same condition. */}
+        {isToday && onEdit && showUpload && (
           <button
             onClick={onEdit}
             aria-label="Edit habit"
@@ -181,12 +184,10 @@ function HabitRow({
 /// except today's starts collapsed; today is always expanded and un-toggleable.
 export function DayGroupsList({
   days,
-  stakeLabel,
   onVerified,
   onEdit,
 }: {
   days: DayGroup[];
-  stakeLabel: string | null;
   onVerified: () => void;
   onEdit?: (contractIndex: number, name: string) => void;
 }) {
@@ -243,7 +244,10 @@ export function DayGroupsList({
                 )}
                 {dayLabel(group.day, group.isToday)}
               </button>
-              {group.isToday && !allResolvedToday ? <TodayStatusPill /> : <PastStatusPill allCompleted={allCompleted} />}
+              {/* Today's own countdown pill was removed per a direct instruction — the stat
+                  row's "time left" pill (app/page.tsx) already covers this; only show a
+                  status pill here once today is actually resolved (or it's a past day). */}
+              {(!group.isToday || allResolvedToday) && <PastStatusPill allCompleted={allCompleted} />}
             </div>
             {/* Fainter than the divider under the "Habits" section header (HabitList.tsx) —
                 this one repeats once per day and shouldn't compete with that single, more
@@ -256,7 +260,6 @@ export function DayGroupsList({
                     key={habit.contractIndex}
                     habit={habit}
                     isToday={group.isToday}
-                    stakeLabel={stakeLabel}
                     onVerified={onVerified}
                     onEdit={
                       group.isToday && onEdit ? () => onEdit(habit.contractIndex, habit.name) : undefined

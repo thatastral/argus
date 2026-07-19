@@ -93,6 +93,7 @@ export async function relayPendingCompletions(user: Address): Promise<number> {
 export interface VaultSnapshot {
   walletAddress: Address;
   symbol: string;
+  decimals: number;
   balance: string;
   available: string;
   committed: string;
@@ -148,6 +149,7 @@ export async function getVaultSnapshot(user: Address): Promise<VaultSnapshot | n
   return {
     walletAddress,
     symbol: isNative ? "MON" : "USDC",
+    decimals,
     balance: formatUnits(balance, decimals),
     available: formatUnits(available, decimals),
     committed: formatUnits(committed, decimals),

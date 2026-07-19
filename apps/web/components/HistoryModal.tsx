@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { formatUnits } from "viem";
-import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { DayGroupsList, type HistoryResponse } from "./HabitDayGroups";
 import { Modal } from "./Modal";
 import { Spinner } from "./Spinner";
@@ -15,7 +13,6 @@ import { Spinner } from "./Spinner";
 /// reset-in-effect.
 function HistoryContent({ onVerified }: { onVerified: () => void }) {
   const [data, setData] = useState<HistoryResponse | null>(null);
-  const { symbol, assetDecimals, walletAddress } = useAccountabilityWallet();
 
   useEffect(() => {
     let cancelled = false;
@@ -29,11 +26,6 @@ function HistoryContent({ onVerified }: { onVerified: () => void }) {
     };
   }, []);
 
-  const stakeLabel =
-    data?.stakeAmountWei != null
-      ? `${formatUnits(BigInt(data.stakeAmountWei), walletAddress ? assetDecimals : 18)} ${walletAddress ? symbol : "MON"}`
-      : null;
-
   if (!data) {
     return (
       <p className="flex items-center gap-1.5 text-sm text-muted">
@@ -42,7 +34,7 @@ function HistoryContent({ onVerified }: { onVerified: () => void }) {
     );
   }
 
-  return <DayGroupsList days={data.days} stakeLabel={stakeLabel} onVerified={onVerified} />;
+  return <DayGroupsList days={data.days} onVerified={onVerified} />;
 }
 
 export function HistoryModal({

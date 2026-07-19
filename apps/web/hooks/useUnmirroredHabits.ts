@@ -7,6 +7,11 @@ import { activeChain } from "@/lib/wagmi";
 
 export interface UnmirroredHabit {
   contractIndex: number;
+  // Read directly from HabitManager.habitStake — an orphaned habit's real stake was already
+  // locked in on-chain when createHabit() succeeded (only the Supabase mirror write failed), so
+  // recovery should mirror that real value rather than leaving it null or asking the user to
+  // re-enter a number that might not match what's actually enforced on-chain.
+  stakeAmountWei: string;
 }
 
 interface ScanResult {
@@ -52,7 +57,15 @@ async function scanHabits(
 
     if (!active) continue;
     activeCount++;
-    if (!mirroredIndexes.has(i)) unmirrored.push({ contractIndex: i });
+    if (!mirroredIndexes.has(i)) {
+      const stake = (await publicClient.readContract({
+        address: addresses.habitManager!,
+        abi: abis.habitManager,
+        functionName: "habitStake",
+        args: [address, BigInt(i)],
+      })) as bigint;
+      unmirrored.push({ contractIndex: i, stakeAmountWei: stake.toString() });
+    }
   }
 
   return { unmirrored, activeCount };

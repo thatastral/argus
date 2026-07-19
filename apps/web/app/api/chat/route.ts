@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getSessionWallet } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase/server";
 import { progressCoachReply } from "@/lib/gemini";
-import { getVaultSnapshot } from "@/lib/chain";
+import { getVaultSnapshot, contractAddresses } from "@/lib/chain";
 import type { PenaltyType } from "@/lib/penalty";
 
 const bodySchema = z.object({
@@ -14,14 +14,15 @@ const HISTORY_WINDOW = 10;
 
 // What actually reaches the client — habitName (the model's natural-language reference) is
 // replaced with a resolved contractIndex before this ever leaves the server; see the POST
-// handler below. set_stake's penaltyType/assetSymbol/assetDecimals are resolved here too, the
-// same way, rather than trusting the model with contract-level enum/precision values.
+// handler below. create_habit's assetSymbol/assetDecimals are resolved here too, the same way,
+// rather than trusting the model with contract-level precision values — the model only ever
+// supplies the human-entered stakeAmount and habit name.
 type ResolvedAction =
-  | { type: "create_habit"; name: string }
+  | { type: "create_habit"; name: string; stakeAmount: string; assetSymbol: string; assetDecimals: number }
   | { type: "edit_habit"; contractIndex: number; currentName: string; newName: string }
   | { type: "deactivate_habit"; contractIndex: number; name: string }
   | { type: "deposit"; amount: string }
-  | { type: "set_stake"; amount: string; penaltyType: PenaltyType; assetSymbol: string; assetDecimals: number }
+  | { type: "set_penalty_type"; penaltyType: PenaltyType }
   | { type: "withdraw"; amount: string };
 
 export async function GET() {
@@ -74,18 +75,25 @@ export async function POST(request: Request) {
       wallet,
     ).maybeSingle(),
     // target_days/deadline_time (migrations 0002/0004) let the coach reference commitment
-    // length and daily deadlines, not just name/active.
-    supabase.from("habits").select("contract_index, name, active, target_days, deadline_time").eq(
-      "wallet_address",
-      wallet,
-    ),
+    // length and daily deadlines, not just name/active. stake_amount_wei/stake_asset_symbol
+    // (migration 0007) is each habit's own locked-in stake — per-habit now, not a single
+    // wallet-level figure (see lib/gemini.ts's system instruction).
+    supabase
+      .from("habits")
+      .select(
+        "contract_index, name, active, target_days, deadline_time, stake_amount_wei::text, stake_asset_symbol, stake_asset_decimals",
+      )
+      .eq("wallet_address", wallet)
+      // Scoped to the currently-configured contract (migration 0008) — a redeploy must never let
+      // the coach describe a stale prior-deployment habit as if it still existed on-chain.
+      .eq("habit_manager_address", contractAddresses.habitManager ?? ""),
     supabase.from("streak_cache").select("*").eq("wallet_address", wallet).maybeSingle(),
-    // amount_wei cast to text — see /api/state/route.ts for why (JSON-number precision loss).
-    // asset_symbol/asset_decimals (migration 0002) is what tells the model the real currency
-    // and decimal count instead of assuming 18-decimal MON — see the system instruction.
+    // asset_symbol/asset_decimals (migration 0002) still tells the model the real currency and
+    // decimal count for createHabit's stakeAmount (instead of assuming 18-decimal MON) — the
+    // amount itself no longer lives here (moved to each habit's own stake, migration 0007).
     supabase
       .from("penalty_configs")
-      .select("penalty_type, amount_wei::text, asset_symbol, asset_decimals")
+      .select("penalty_type, asset_symbol, asset_decimals")
       .eq("wallet_address", wallet)
       .maybeSingle(),
     supabase
@@ -173,12 +181,10 @@ export async function POST(request: Request) {
     });
     reply = result.reply;
 
-    // The model only ever names a habit by its display name, and never decides penaltyType/
-    // asset precision itself (see lib/gemini.ts) — resolve both here, server-side, against data
-    // already fetched for context, rather than ever trusting a value the model might hallucinate.
-    // A habit-name action that matches nothing is silently dropped; every other action type
-    // always resolves (set_stake has no matching-failure case — it just needs the current
-    // penalty config, same defaults contextJson above already uses).
+    // The model only ever names a habit by its display name, and never decides asset precision
+    // itself (see lib/gemini.ts) — resolve both here, server-side, against data already fetched
+    // for context, rather than ever trusting a value the model might hallucinate. A habit-name
+    // action that matches nothing is silently dropped; every other action type always resolves.
     proposedActions = result.proposedActions.flatMap((raw): ResolvedAction[] => {
       if (raw.type === "edit_habit" || raw.type === "deactivate_habit") {
         const match = (habits ?? []).find(
@@ -189,14 +195,17 @@ export async function POST(request: Request) {
           ? [{ type: "edit_habit", contractIndex: match.contract_index, currentName: match.name, newName: raw.newName }]
           : [{ type: "deactivate_habit", contractIndex: match.contract_index, name: match.name }];
       }
-      if (raw.type === "set_stake") {
+      if (raw.type === "create_habit") {
+        // Same precedence as wallet.symbol/assetDecimals in contextJson below: a deployed
+        // vault's live on-chain asset is authoritative once it exists, penalty_configs' record
+        // of what was chosen during onboarding is the only source before that.
         return [
           {
-            type: "set_stake",
-            amount: raw.amount,
-            penaltyType: (penalty?.penalty_type as PenaltyType | undefined) ?? "savingsVault",
-            assetSymbol: penalty?.asset_symbol ?? "MON",
-            assetDecimals: penalty?.asset_decimals ?? 18,
+            type: "create_habit",
+            name: raw.name,
+            stakeAmount: raw.stakeAmount,
+            assetSymbol: vault?.symbol ?? penalty?.asset_symbol ?? "MON",
+            assetDecimals: vault?.decimals ?? penalty?.asset_decimals ?? 18,
           },
         ];
       }

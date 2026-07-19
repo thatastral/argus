@@ -40,6 +40,6 @@ abstract contract ArgusTestBase is Test {
     /// @param asset address(0) for a native-MON vault, or an ERC-20 address (e.g. `usdc`).
     function deployWalletFor(address user, address asset) internal returns (AccountabilityWallet wallet) {
         vm.prank(user);
-        wallet = AccountabilityWallet(payable(factory.deployWallet(asset)));
+        wallet = AccountabilityWallet(payable(factory.deployWallet(asset, 0)));
     }
 }

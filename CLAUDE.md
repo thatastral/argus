@@ -97,11 +97,22 @@ Any change to these four contracts' constructors needs this sequence re-verified
 
 ### Non-custodial vault with three balances (why there are 4-5 contracts, not the PRD's 3)
 
-`ArgusFactory.deployWallet(asset)` deploys a fresh `AccountabilityWallet` per user, **owned
-entirely by that user's wallet address** — Argus never custodies funds or keys. `asset` is
-fixed at deploy time: `address(0)` for native MON, or an ERC-20 address (e.g. `MockUSDC` on
-testnet) — a vault only ever holds one asset, and `deposit()`/`depositERC20()` are separate
-paths that each revert (`WrongAssetPath`) if called on the wrong kind of vault.
+`ArgusFactory.deployWallet(asset, initialDeposit)` deploys a fresh `AccountabilityWallet` per
+user, **owned entirely by that user's wallet address** — Argus never custodies funds or keys.
+`asset` is fixed at deploy time: `address(0)` for native MON, or an ERC-20 address (e.g.
+`MockUSDC` on testnet) — a vault only ever holds one asset, and `deposit()`/`depositERC20()` are
+separate paths that each revert (`WrongAssetPath`) if called on the wrong kind of vault.
+`initialDeposit` (optional, pass `0` for the original deploy-only behavior) folds the vault's
+first deposit into the same transaction as deploying it — per a direct instruction to cut
+onboarding friction, since deploy-then-deposit used to always be two separate signatures. It
+calls straight into the new wallet's own `deposit()`/`depositERC20()` (rather than duplicating
+that logic in the factory) so the exact same `Deposited` event fires either way. For native MON,
+`msg.value` must equal `initialDeposit` exactly (`MismatchedDeposit` otherwise) and nothing else
+is needed — one signature total. For an ERC-20 vault, the caller must `approve()` **this
+factory** (not the not-yet-deployed wallet address, which isn't knowable in advance without
+CREATE2) for at least `initialDeposit` first — still two signatures, down from three
+(deploy, approve, deposit). See `DeployWalletForm.tsx`'s doc comment for the frontend side of
+this (it now also handles the USDC approve-against-the-factory step itself).
 
 Three logical balances (`AccountabilityWallet.sol`'s contract-level doc comment has the full
 design rationale) — only `savingsVaultAmount` is actually stored; the other two are live views
@@ -109,20 +120,24 @@ recomputed on every read, never a separate transaction to keep in sync:
 - **Available** (`availableBalance()`) — withdrawable anytime. The wallet is never locked
   wallet-wide anymore — that model (the whole vault locked until today's habits were done) was
   removed along with Hard Mode.
-- **Committed** (`committedAmount()`) — `PenaltyEngine.penaltyAmountOf(owner) *
-  HabitManager.pendingHabitCount(owner)`, clamped to whatever the vault can actually cover right
-  now. Multiplied, not flat: a single missed day fails every active habit at once, so a lone
-  habit's stake was never the real worst-case exposure once a user has more than one running —
-  the flat version undercounted a user with, say, 3 habits and only enough stake for one.
-  `pendingHabitCount(user)` (`HabitManager.sol`) counts active habits **not yet verified complete
-  today** — a direct instruction ("once a user completes a habit, make its stake available to
-  withdraw immediately") — so completing a habit removes its share from Committed the moment
-  `completeHabit()` is called, before real UTC-midnight settlement, with no separate transaction
-  (Available is just `balanceOf() - committedAmount() - locked`, so this is a pure view
-  recalculation, not a fund transfer — there is only one real balance in the contract). This
-  replaced an earlier version keyed on `activeHabitCount(user)` alone (active regardless of
-  today's completion), which is still exposed as its own view but no longer read by
-  `committedAmount()`. **Accepted trade-off, documented in `pendingHabitCount`'s own doc
+- **Committed** (`committedAmount()`) — the **sum of every still-pending-today active habit's
+  own locked-in stake** (`HabitManager.pendingStake(owner)`), clamped to whatever the vault can
+  actually cover right now. Per-habit, not a shared wallet-level figure: each habit's stake is
+  set once, at `createHabit(stakeAmount)` time, and stored in `HabitManager.habitStake` —
+  **immutable for that habit's lifetime**, per a direct instruction that changing your stake in
+  Settings must never retroactively change what an already-created habit has at risk. There is
+  no more wallet-level "current stake" to configure; `PenaltyEngine.configurePenalty` lost its
+  `amount` parameter entirely and now only sets the consequence *type*. To change a habit's
+  stake, deactivate it and create a new one — there's no `updateHabitStake`-style call.
+  `pendingStake(user)` (`HabitManager.sol`) sums active habits **not yet verified complete
+  today** — a completed habit's stake stops counting the moment `completeHabit()` is called,
+  before real UTC-midnight settlement, becoming withdrawable immediately with no separate
+  transaction (Available is just `balanceOf() - committedAmount() - locked`, so this is a pure
+  view recalculation, not a fund transfer — there is only one real balance in the contract).
+  Summing (rather than a flat or multiplied figure) matters for the same reason it always did: a
+  single missed day fails every active habit at once (settle() is pass/fail per day, not per
+  habit — see `HabitManager._allActiveCompletedOn`), and `PenaltyEngine.execute()` moves this
+  entire summed figure in one shot. **Accepted trade-off, documented in `pendingStake`'s own doc
   comment**: `PenaltyEngine.execute()` reads `committedAmount()` fresh whenever `settle()`
   actually runs for a past day, not a snapshot from the day that failed — completing today's
   habits before a backlog of unsettled past misses is cleared can partially reduce what gets
@@ -130,10 +145,13 @@ recomputed on every read, never a separate transaction to keep in sync:
   opportunistic settle-on-every-load/verify calls plus the daily cron keep backlogs rare and
   small) rather than adding the extra complexity of forcing settlement to catch up first.
   It's also still a *standing* commitment for whatever's still pending: once a miss moves it into
-  the Savings Vault, the same configured amount immediately re-commits from whatever's left (for
-  habits still pending that day), so the user stays "at risk" for the rest of the day
-  automatically with no separate re-commit action — see
-  `AccountabilityWallet.committedAmount()`'s doc comment for a worked example.
+  the Savings Vault, the same still-pending habits' stakes immediately re-commit from whatever's
+  left, so the user stays "at risk" for the rest of the day automatically with no separate
+  re-commit action — see `AccountabilityWallet.committedAmount()`'s doc comment for a worked
+  example. Off-chain, `habits.stake_amount_wei`/`stake_asset_symbol`/`stake_asset_decimals`
+  (migration 0007) mirror each habit's own stake for display (`HabitDayGroups.tsx`'s `HabitRow`
+  formats it per-row now, not from a single shared `stakeLabel` prop) — purely informational,
+  same convention as `target_days`/`deadline_time`.
 - **Savings Vault** (`savingsVaultAmount` / `savingsVaultUnlockAt`) — what a missed day moved
   here, still the user's own funds, locked until the unlock timestamp. A *rolling* lock: a new
   miss while already locked extends the unlock time from now, rather than tracking independent
@@ -142,16 +160,34 @@ recomputed on every read, never a separate transaction to keep in sync:
   invisible until a user had already missed a day.
 
 **Onboarding requires funding before any habit exists.** `SetupFlow.tsx`'s step order is
-`profile → penalty → wallet → habit → done` — deploying the vault and depositing at least one
-habit's worth of stake (Continue stays disabled until `availableBalance() >= stakeAmount`) now
-happens before a user can create their first on-chain habit, closing a real gap where someone
-could create a habit and start uploading proof with zero funds actually at risk. The dashboard's
-"+ Add Habit" (`HabitList.tsx`) enforces the same available-balance check for every habit added
-after the first, alongside the existing 3-habit cap.
+`profile → setup → habit → done` — "setup" merges what used to be two separate steps/screens
+("penalty" then "wallet"), per a direct instruction to cut onboarding friction. It's one
+continuous screen now: pick the consequence type, an asset (fixing the vault's deploy-time
+asset), and a stake amount, then "Continue" calls `configurePenalty(type)` (no `amount` param
+anymore — see the Committed section above); the *same* screen then reveals a second action using
+the *same* stakeAmount/asset already entered — `DeployWalletForm` with `initialDeposit` set,
+which deploys **and** funds the vault in one signature (native MON) or two (ERC-20, still needs
+its own `approve()`; see the vault section above for both). A `useEffect` auto-advances straight
+to the "habit" step once `walletAddress` exists and `availableBalance() >= stakeAmount` — no
+extra "Continue" click needed for the common case, though a plain deposit-more fallback UI still
+exists for the edge case of resuming an interrupted/older setup where the vault exists but isn't
+funded enough yet. `penaltyConfigured` (session-local state) `|| Boolean(walletAddress)` is how
+the screen knows to skip straight to the deploy half if either already happened. That amount
+isn't configured on-chain at the "setup" step for a reason beyond friction, too: it's not spent
+until the deploy-with-deposit call (or, if a vault already exists, the manual deposit above) —
+it's only ever *locked into a specific habit* at the "habit" step's own
+`createHabit(stakeAmount)` call for the first habit (see the Committed section above). Creating
+that first habit still can't happen until the vault is funded enough to cover it, closing a real
+gap where someone could create a habit and start uploading proof with zero funds actually at
+risk. `AddHabitModal.tsx` (the dashboard's "+ Add Habit", and chat's `createHabit` tool) each
+collect their own fresh stake amount for every subsequent habit — there's no wallet-level default
+to inherit, and each validates inline that the amount doesn't exceed `availableFormatted` rather
+than a proactive pre-check before the modal even opens (not knowable in advance anymore, since
+the amount isn't chosen until the user is already there), alongside the existing 3-habit cap.
 
 `withdraw()` checks only `availableBalance()` and never touches `HabitManager` itself.
 `habitManager` is present in the constructor again (see the deploy order above), but solely so
-`committedAmount()` can read `pendingHabitCount` — `isUnlockedToday()`'s old wallet-wide gating
+`committedAmount()` can read `pendingStake` — `isUnlockedToday()`'s old wallet-wide gating
 role is still gone for good; this is a narrower read-only dependency, not a revival of Hard Mode.
 Only `PenaltyEngine` may move funds, via `executePenalty()` (Donate — an actual transfer out) or
 `moveToSavingsVault()` (re-earmarks in place; funds never leave the contract). Frontend looks up
@@ -187,9 +223,11 @@ frontend (`lib/penalty.ts`), and Supabase's `penalty_configs.penalty_type` check
 match this 2-value enum now (see `packages/supabase/migrations/0005_drop_wallet_mode_add_proof_type.sql`
 for the data migration off the old values — existing `save`/`partner`/`surprise` rows become
 `savingsVault`, never silently `donate`, since that would change what happens to a user's money
-without their choosing it). `configurePenalty(PenaltyType, amount)` — no more `partner` address
-param. `PenaltyEngine.execute(user)` reads the amount fresh from the wallet's own
-`committedAmount()` (not a value stored in `PenaltyEngine` itself) before moving it.
+without their choosing it). `configurePenalty(PenaltyType)` — no more `partner` address param,
+and no more `amount` param either (moved to `HabitManager.habitStake`, set once per habit at
+creation — see the Committed section above). `PenaltyEngine.execute(user)` reads the amount
+fresh from the wallet's own `committedAmount()` (not a value stored in `PenaltyEngine` itself)
+before moving it.
 
 ### On-chain vs off-chain split — habit *names* are Supabase-only, on purpose
 
@@ -216,6 +254,42 @@ regardless of the local deadline time. This was an explicit scope decision (aske
 user chose UI-only over wiring the deadline into real on-chain enforcement) — don't silently
 upgrade it to affect settlement without checking first, since a timezone bug there would move
 real funds.
+
+`target_days` **does** now bound how far a habit is allowed to recur in the off-chain display
+layer, via `lib/habitDuration.ts`'s `isWithinHabitDuration(createdAt, targetDays, dayIndex)` —
+still purely a Supabase/read-side concern, not a change to the on-chain rule above. Before this,
+a fixed-duration habit (e.g. a 1-day "Pick a date" habit) kept showing up as "today's habit"
+forever after its configured span ended, since nothing ever excluded it once `target_days` days
+had elapsed — `active` only ever went false via explicit user deletion
+(`PATCH /api/habits`). Every place that decides "is this habit live for day X" now applies this
+bound: `/api/habits/history/route.ts`'s per-day inclusion filter (so a 1-day habit only appears
+on the one day it was actually configured for, not every later day too), and
+`/api/state/route.ts` (which folds it into the `active` flag it returns, so `app/page.tsx`'s
+existing `.filter((h) => h.active)` for the dashboard's action list needed no changes). A habit
+with `target_days: null` ("No end date") is unaffected — that's the one case actually configured
+to recur indefinitely.
+
+### Habit rows are scoped to the currently-configured contract (`habit_manager_address`)
+
+Redeploying contracts is routine on this project (see the redeploy notes further down) and
+resets `HabitManager`'s on-chain state to zero for every wallet — but Supabase's `habits` mirror
+was never automatically cleared to match. Left alone, a wallet's rows from a prior deployment
+could bleed into the new one: history could show "imaginary" days that never happened on the
+current contract, or a stale `active: true` row could keep surfacing as "today's habit" even
+though nothing on the freshly-deployed `HabitManager` corresponds to it. Migration
+`0008_habits_contract_scoped.sql` adds `habits.habit_manager_address`, stamped on every write
+(`POST /api/habits`) with whichever contract is currently configured
+(`NEXT_PUBLIC_HABIT_MANAGER_ADDRESS`, via `lib/chain.ts`'s `contractAddresses.habitManager`).
+Every read of `habits` (`GET`/`PATCH /api/habits`, `/api/habits/history`, `/api/state`,
+`/api/chat`) filters on it — a prior deployment's rows just stop being shown, not deleted.
+Pre-existing rows get `NULL` (no way to know retroactively which deployment they belonged to),
+which correctly excludes them too, since `NULL` never matches a real contract address.
+
+`/api/habits/history/route.ts`'s `?window=full` mode also got a defensive floor
+(`earliestHabitDayIndex`, derived from the now-correctly-scoped `habitRows`' own `created_at`
+values): its on-chain `startDay` read has always had a `try/catch` defaulting to `startDay = 0`
+on failure, but unlike the home-window path that default was never clamped in full mode — a
+failed read could otherwise walk the day-range loop back to the Unix epoch.
 
 ### Auth: wallet-signature only, no Supabase Auth
 
@@ -255,7 +329,7 @@ row without clobbering an existing one's `display_name`.
    the anti-cheat pipeline below for how `challenge` gets into this call.
 2. `progressCoachReply` — explains the user's own structured data back to them via a system
    instruction that explicitly refuses unrelated questions. Never a general-purpose assistant.
-   Also does function-calling for five agentic actions (see the section right below) — the user
+   Also does function-calling for six agentic actions (see the section right below) — the user
    still confirms (and, for on-chain ones, signs) client-side; the model never executes anything
    directly. The system instruction's habit-cap description must stay in sync with the contract:
    it currently says a user can have at most 3 **active** habits (count only `active: true` rows
@@ -269,28 +343,34 @@ row without clobbering an existing one's `display_name`.
 ### Progress Coach's agentic actions — propose server-verified, never execute directly
 
 Six function-calling tools (`lib/gemini.ts`): `createHabit`, `editHabit` (rename),
-`deactivateHabit`, `deposit`, `setStake`, `withdraw`. Every one only *proposes* —
+`deactivateHabit`, `deposit`, `setPenaltyType`, `withdraw`. Every one only *proposes* —
 `ProgressCoachResult.proposedActions` is always an array (possibly empty, never a single
 optional value), and the model is **never trusted with a real on-chain index or enum**:
-`editHabit`/`deactivateHabit` only ever take a `habitName` string, and `setStake` only ever takes
-an `amount` — `app/api/chat/route.ts`'s `POST` handler resolves `habitName` to a real
-`contractIndex` server-side (a case-insensitive match against the same `habits` rows already
-fetched for context) and resolves `setStake`'s `penaltyType`/`assetSymbol`/`assetDecimals` from
-the already-fetched `penalty` row (same `?? "savingsVault"` / `?? "MON"` / `?? 18` defaults
-`contextJson` already uses) — neither ever reaches the client as something the model chose. A
-`habitName` match failure is silently dropped from the array rather than erroring; every other
-action type always resolves.
+`editHabit`/`deactivateHabit` only ever take a `habitName` string — `app/api/chat/route.ts`'s
+`POST` handler resolves `habitName` to a real `contractIndex` server-side (a case-insensitive
+match against the same `habits` rows already fetched for context); a match failure is silently
+dropped from the array rather than erroring. `createHabit` takes a plain `stakeAmount` string
+(the model never decides decimals/asset) — resolved server-side against the deployed vault's
+live asset if one exists, falling back to `penalty_configs.asset_symbol`/`asset_decimals`
+(same precedence as `wallet.symbol` in `contextJson`) before it ever reaches the client.
+`setPenaltyType` only ever takes a `penaltyType` enum (`"savingsVault" | "donate"`) — no amount,
+since there is no more wallet-level stake to set (see the Committed section above; each habit's
+own stake is fixed forever at `createHabit` time). Every other action type always resolves.
 
-**`deposit` and `setStake` are easy to conflate and are NOT interchangeable** — this was a real
-reported bug: asking for "commit 0.5 MON to my accountability wallet" got silently routed onto
-`deposit` (the only funds-related tool that existed at the time), which only ever adds to
-Available and never touches the actual per-habit stake. `deposit` moves funds into the vault;
-`setStake` changes the configured per-habit amount that `wallet.committed` scales from (via
-`PenaltyEngine.configurePenalty`) and moves no funds at all. The system instruction now
-explicitly tells the model "commit"/"stake"/"pledge" language means `setStake`, not `deposit`,
-even if the user also says "wallet" in the same sentence. `hooks/useSetStake.ts` is the shared
-hook (extracted out of `SettingsSheet.tsx`'s inline `configurePenalty` + `/api/penalty` mirror
-sequence) both the settings UI and the chat-confirm flow call.
+**`deposit` and `createHabit`'s `stakeAmount` are easy to conflate and are NOT
+interchangeable** — this was a real reported bug back when the amount lived wallet-level in a
+`setStake` tool: asking for "commit 0.5 MON to my accountability wallet" got silently routed
+onto `deposit`, which only ever adds to Available and never touched the actual stake. `deposit`
+moves funds into the vault's general balance; a habit's `stakeAmount` is a specific amount locked
+onto that one habit, permanently, the moment it's created — there is no longer a way to
+"commit"/"stake"/"pledge" an amount without creating a habit to attach it to. The system
+instruction tells the model this explicitly, and to ask for an amount rather than guessing one
+if the user doesn't mention it when asking for a new habit. `hooks/useSetPenaltyType.ts` (renamed
+from the old `useSetStake.ts`, which also took an amount) is the shared hook — extracted out of
+`SettingsSheet.tsx`'s inline `configurePenalty` + `/api/penalty` mirror sequence — both the
+settings UI and the chat-confirm flow call; `hooks/useCreateHabit.ts` is the equivalent shared
+hook for `createHabit`, called from `SetupFlow.tsx`, `AddHabitModal.tsx`, and the chat-confirm
+flow alike.
 
 **A single message can propose more than one action** (e.g. "deposit 1 and commit 0.5") —
 `progressCoachReply` used to read only `response.functionCalls?.[0]`, silently dropping every
@@ -734,15 +814,41 @@ a rejected/cancelled signature doesn't lose an already-valid name change, and `n
 - ~~No real cron calls `HabitManager.settle()` daily~~ — **closed.** `app/api/cron/settle/route.ts`
   (gated by a `CRON_SECRET` bearer-token check, since it acts across every wallet rather than a
   single session) loops `lib/chain.ts`'s `settlePendingDays()` over every wallet with an active
-  habit; `vercel.json` registers it to run once daily shortly after UTC midnight. This was the
-  root cause behind two related live reports — penalties not firing and streaks looking stale —
-  since previously nothing settled a day unless a user happened to open the app or verify a habit
-  around that day's boundary. The opportunistic calls from `/api/state` and `/api/verify` (via
-  `after()`, so they don't block the response) still exist too, as a faster same-session
-  catch-up; the cron is the backstop for wallets that never open the app. Requires `CRON_SECRET`
-  set in both `.env.local` and the Vercel project's env vars — Vercel sends it automatically as
-  `Authorization: Bearer $CRON_SECRET` for its own scheduled invocations once the env var exists,
-  nothing else to wire up on that side. **`vercel.json` must live at `apps/web/vercel.json`**,
+  habit. Two independent triggers call this same endpoint now, per a direct instruction to settle
+  faster than once a day without needing a paid Vercel plan:
+  1. **`.github/workflows/settle-cron.yml`** — a GitHub Actions scheduled workflow, `*/15 * * * *`
+     (every 15 minutes), `curl`s the endpoint with `Authorization: Bearer ${{ secrets.CRON_SECRET
+     }}`. This is the primary mechanism now — a missed day's penalty fires within minutes of the
+     real UTC-midnight boundary rather than up to ~24h later. The `CRON_SECRET` value is set as a
+     GitHub Actions repo secret (`gh secret set CRON_SECRET`, already done — value lives only in
+     GitHub's secret store and `.env.local`, never printed anywhere). Also has `workflow_dispatch:`
+     so it can be triggered manually (Actions tab, or `gh workflow run settle-cron.yml`) without
+     waiting for the next tick. GitHub disables a scheduled workflow after 60 days of zero repo
+     activity, which is what (2) below guards against.
+  2. **`vercel.json`'s own `crons` entry** — reverted back to once-daily (`5 0 * * *`, shortly
+     after UTC midnight), kept deliberately as a fallback backstop rather than removed outright,
+     in case (1) is ever paused or its secret drifts out of sync. Vercel's Hobby plan caps cron
+     jobs at once per day, which is exactly why the faster cadence moved to GitHub Actions instead
+     of just raising this schedule's frequency (a sub-daily `vercel.json` schedule silently doesn't
+     run at that cadence on Hobby).
+  Settling stays whole-day/all-or-nothing regardless of which trigger fires it or how often — this
+  only changes how promptly the existing settlement logic gets invoked, not the logic itself (see
+  the Committed section above for why a per-habit, immediate-on-its-own-deadline version was
+  deliberately not built instead: it would need a new on-chain `settleHabit()` and would complicate
+  how streaks aggregate per-day success across habits with different deadline times). This was the
+  original root cause behind two related live reports — penalties not firing and streaks looking
+  stale — since previously nothing settled a day unless a user happened to open the app or verify
+  a habit around that day's boundary. The opportunistic calls from `/api/state` and `/api/verify`
+  (via `after()`, so they don't block the response) still exist too, as an even-faster
+  same-session catch-up; the two cron triggers above are backstops for wallets that never open the
+  app. Separately, `HabitDayGroups.tsx` already shows a habit as "Missed" the instant its own
+  (UI-only) `deadline_time` passes, well before any real settlement runs — that per-habit,
+  immediate *display* signal was already correct and needed no change; only the actual on-chain
+  execution timing did. Requires `CRON_SECRET`
+  set in `.env.local`, the Vercel project's env vars, and (see above) as a GitHub Actions repo
+  secret — Vercel sends it automatically as `Authorization: Bearer $CRON_SECRET` for its own
+  scheduled invocations once the env var exists, nothing else to wire up on that side.
+  **`vercel.json` must live at `apps/web/vercel.json`**,
   the Vercel project's configured Root Directory — not the monorepo root. Vercel only ever reads
   `vercel.json` from Root Directory, so one sitting at the repo root (easy to create by accident
   in a monorepo) is silently never read and its `crons` entry never registers, even though the

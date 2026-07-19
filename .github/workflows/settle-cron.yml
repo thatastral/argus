@@ -1,0 +1,22 @@
+name: Settle pending days
+
+# Free replacement for Vercel's own cron scheduler, which caps sub-daily schedules to the Pro
+# plan — this just hits the same CRON_SECRET-protected /api/cron/settle endpoint on a schedule
+# from GitHub Actions instead (see CLAUDE.md's "Known gaps" section). vercel.json's own cron
+# stays at once-daily as a fallback backstop in case this workflow is ever paused (GitHub
+# disables scheduled workflows after 60 days with no repo activity) or the secret drifts.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  # Lets this be triggered manually (Actions tab, or `gh workflow run settle-cron.yml`) to test
+  # without waiting for the next scheduled tick.
+  workflow_dispatch:
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/cron/settle
+        run: |
+          curl -sf -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://argus-web-omega.vercel.app/api/cron/settle

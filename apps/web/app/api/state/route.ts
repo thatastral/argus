@@ -1,7 +1,8 @@
 import { NextResponse, after } from "next/server";
 import { getSessionWallet } from "@/lib/session";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { relayPendingCompletions, settlePendingDays } from "@/lib/chain";
+import { relayPendingCompletions, settlePendingDays, contractAddresses } from "@/lib/chain";
+import { isWithinHabitDuration } from "@/lib/habitDuration";
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -43,11 +44,17 @@ export async function GET() {
         .maybeSingle(),
       // deadline_time lets the dashboard's welcome-line summary resolve "today" the same way
       // HabitDayGroups.tsx does (verified, or its own deadline has passed) instead of only ever
-      // looking at `verified` — see app/page.tsx.
+      // looking at `verified` — see app/page.tsx. target_days/created_at (below) are only used
+      // here to fold duration-elapsed habits out of `active` before returning — not otherwise
+      // exposed, so page.tsx's existing `.filter((h) => h.active)` keeps working unmodified.
       supabase
         .from("habits")
-        .select("contract_index, name, active, deadline_time")
+        .select("contract_index, name, active, deadline_time, target_days, created_at")
         .eq("wallet_address", wallet)
+        // Scoped to the currently-configured contract (migration 0008) — see
+        // app/api/habits/route.ts's POST handler for why a redeploy must never let a prior
+        // deployment's row surface as "today's habit" on the dashboard.
+        .eq("habit_manager_address", contractAddresses.habitManager ?? "")
         .order("contract_index", { ascending: true }),
       supabase.from("streak_cache").select("*").eq("wallet_address", wallet).maybeSingle(),
       // amount_wei is numeric(78,0) — cast to text so PostgREST sends it as a JSON string.
@@ -76,10 +83,22 @@ export async function GET() {
         .limit(30),
     ]);
 
+  const todayDayIndex = Math.floor(Date.now() / 86_400_000);
+  // Folds "was this habit only configured to recur for a fixed number of days, and has that span
+  // now elapsed" into `active` itself, so every existing consumer of this response (page.tsx's
+  // `.filter((h) => h.active)` for the dashboard's action list) automatically stops treating a
+  // finished fixed-duration habit as "today's habit" without needing its own duration-aware
+  // logic. The underlying habits.active column (mirrors on-chain/manual deactivation) is
+  // untouched — this only affects what this one response reports.
+  const habitsWithEffectiveActive = (habits ?? []).map((h) => ({
+    ...h,
+    active: h.active && isWithinHabitDuration(h.created_at, h.target_days, todayDayIndex),
+  }));
+
   return NextResponse.json({
     wallet,
     user,
-    habits: habits ?? [],
+    habits: habitsWithEffectiveActive,
     streak,
     penalty,
     todaysCompletions: todaysCompletions ?? [],

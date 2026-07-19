@@ -14,12 +14,12 @@ import {IHabitManager} from "./interfaces/IHabitManager.sol";
 /// Three logical balances. Only `savingsVaultAmount` is actually stored; the other two are
 /// live views so they can never drift out of sync with a deposit/withdraw/reconfigure:
 /// - **Available** (`availableBalance()`): withdrawable anytime, never gated by habit progress.
-/// - **Committed** (`committedAmount()`): the user's own configured *per-habit* stake
-///   (`PenaltyEngine.penaltyAmountOf`) times how many habits are currently active
-///   (`HabitManager.activeHabitCount`), clamped to whatever the vault can actually cover right
-///   now — computed fresh on every call rather than stored, so there's no separate "commit"
-///   transaction to keep in sync with deposits/withdrawals/reconfiguring the stake amount or
-///   creating/deactivating a habit.
+/// - **Committed** (`committedAmount()`): the sum of every still-pending-today active habit's
+///   own locked-in stake (`HabitManager.pendingStake`, each habit's stake set once at
+///   creation — see HabitManager.createHabit), clamped to whatever the vault can actually
+///   cover right now — computed fresh on every call rather than stored, so there's no
+///   separate "commit" transaction to keep in sync with deposits/withdrawals/creating a habit/
+///   a habit being completed for the day.
 /// - **Savings Vault** (`savingsVaultAmount`): funds moved here by a missed day (see
 ///   `moveToSavingsVault`) — still the user's own funds, just locked until
 ///   `savingsVaultUnlockAt`. A rolling lock: a new miss while already locked extends the
@@ -132,28 +132,29 @@ contract AccountabilityWallet is ReentrancyGuard {
         return asset == address(0) ? address(this).balance : IERC20(asset).balanceOf(address(this));
     }
 
-    /// @notice The user's own configured *per-habit* stake, times how many active habits are
-    /// still *pending* today (i.e. not yet verified complete — see
-    /// HabitManager.pendingHabitCount), clamped to what's available to cover it. A live view, not
+    /// @notice Sum of every still-pending-today active habit's own locked-in stake (see
+    /// HabitManager.pendingStake), clamped to what's available to cover it. A live view, not
     /// stored state — see the contract-level doc comment. A completed habit's stake becomes
     /// withdrawable immediately (moves from Committed to Available with no separate transaction,
     /// since Available is just balanceOf() minus this) rather than staying reserved until
-    /// midnight — see HabitManager.pendingHabitCount's doc comment for the accepted trade-off
-    /// this introduces against a still-unsettled prior miss.
+    /// midnight — see HabitManager.pendingStake's doc comment for the accepted trade-off this
+    /// introduces against a still-unsettled prior miss.
     ///
-    /// Multiplying (rather than a flat per-wallet amount) still matters the same way it always
-    /// did: a single missed day can fail every active habit at once (settle() is pass/fail per
-    /// day, not per habit — see HabitManager._allActiveCompletedOn) and PenaltyEngine.execute()
-    /// moves this entire figure in one shot. Because it's a *standing* commitment
-    /// (configurePenalty isn't a one-shot action) and pendingHabitCount can change independently
-    /// of any deposit/withdraw, it re-derives itself continuously: e.g. a 0.5-ether-per-habit
-    /// stake across 2 still-pending habits on a 1.5-ether balance that just moved 1 ether into
-    /// the Savings Vault immediately re-commits the same 1 ether from what's left, so
+    /// Summing per-habit stakes (rather than a single wallet-level amount) is deliberate, per a
+    /// direct instruction: changing your stake in Settings must never retroactively change what
+    /// an already-created habit has at risk, so each habit's own stake — fixed forever at
+    /// creation — has to be tracked and summed individually rather than derived from one shared
+    /// "current" figure. A single missed day still fails every active habit at once (settle() is
+    /// pass/fail per day, not per habit — see HabitManager._allActiveCompletedOn) and
+    /// PenaltyEngine.execute() still moves this entire summed figure in one shot. Because
+    /// pendingStake can change independently of any deposit/withdraw (a habit completing or a
+    /// new one being created), this re-derives itself continuously: e.g. 0.5 ether + 0.3 ether
+    /// staked across 2 still-pending habits on a 1.5-ether balance that just moved 0.8 ether into
+    /// the Savings Vault immediately re-commits the same 0.8 ether from what's left, so
     /// availableBalance() is 0 until more is deposited — the user stays "at risk" for the rest of
     /// today automatically, without a separate re-commit transaction.
     function committedAmount() public view returns (uint256) {
-        uint256 configured =
-            IPenaltyEngineView(penaltyEngine).penaltyAmountOf(owner) * IHabitManager(habitManager).pendingHabitCount(owner);
+        uint256 configured = IHabitManager(habitManager).pendingStake(owner);
         uint256 uncommitted = balanceOf() - _lockedSavingsVault();
         return configured > uncommitted ? uncommitted : configured;
     }
