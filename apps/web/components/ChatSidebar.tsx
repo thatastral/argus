@@ -240,7 +240,7 @@ export function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => v
       <GlowBackground intensity={0.4} />
       <DotGrid intensity={0.15} />
 
-      <div className="relative z-10 flex flex-1 flex-col">
+      <div className="relative z-10 flex min-h-0 flex-1 flex-col">
         <div className="flex items-center justify-between px-6 py-5">
         <span className="text-lg font-semibold">Chat with Argus</span>
         <button
@@ -252,7 +252,7 @@ export function ChatSidebar({ open, onClose }: { open: boolean; onClose: () => v
         </button>
       </div>
 
-      <div className="flex-1 space-y-5 overflow-y-auto px-6 pb-4">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-4">
         {messages.length === 0 && <p className="pt-2 text-sm text-muted">Ask about your streak, wallet, progress, or add a habit.</p>}
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
