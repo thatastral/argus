@@ -1,33 +1,131 @@
 @import "tailwindcss";
 
-/* Design philosophy (PRD): white / black / grey only. No gradients, no glassmorphism,
-   no decorative UI. Closer to ChatGPT than a crypto dashboard. */
+/* Design language: dark, near-black surfaces, DM Sans body + Rakkas wordmark. Exact values
+   below are taken directly from a Figma "Copy as CSS" export the user provided — not
+   approximated. Single (dark) theme, no light-mode variant — the spec doesn't define one. */
 
 :root {
-  --background: #ffffff;
-  --foreground: #111111;
-  --muted: #6b6b6b;
-  --border: #e5e5e5;
-  --surface: #f7f7f7;
+  --background: #141514; /* page */
+  --card: #111211; /* the big rounded content card, and modal/sheet panels */
+  --foreground: #ffffff;
+  --muted: rgba(255, 255, 255, 0.6); /* general secondary text default — components needing a
+    precise spec tier (0.7 / 0.45 / 0.38 / 0.13) use an explicit text-white/NN utility instead */
+  --border: rgba(255, 255, 255, 0.2); /* == the spec's divider color */
+  --surface: rgba(255, 255, 255, 0.04); /* pill/button fill */
+  --warning: #fe7667; /* coral — today's countdown */
+  --success: #67fe90; /* mint — completed */
+  --flame: #fdba3b; /* amber — reserved for exactly two gamification/AI moments: the streak
+    flame badge and the Argus Insight card, kept distinct from --warning's danger/at-risk
+    meaning and --success's completed meaning */
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-surface: var(--surface);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+  --color-flame: var(--flame);
+  --font-sans: var(--font-dm-sans);
+  --font-display: var(--font-rakkas);
+
+  /* emil-design-eng: Tailwind's built-in ease-out (cubic-bezier(0,0,0.2,1)) is a weaker curve
+     than a proper "strong ease-out" — this one has real punch on entrances/press feedback.
+     Registered here (not just :root) so `ease-emil-out` becomes a usable Tailwind utility. */
+  --ease-emil-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  /* Mount-in animations — opacity + scale(0.95→1), never scale(0) (nothing in the real world
+     pops in from nothing). Panels just unmount on close (no framer-motion installed), so only
+     entrances are defined, no exit keyframe. */
+  --animate-modal-in: modal-in 200ms var(--ease-emil-out);
+  --animate-toast-in: toast-in 200ms var(--ease-emil-out);
+  /* Transform-only sweep for the proof-verification scanning overlay (LiveCameraCapture.tsx). */
+  --animate-scan-line: scan-line 1.8s ease-in-out infinite;
+  /* Slow rotation for the "Chat with Argus" hover aura — a blurred conic-gradient ring behind
+     the button, spun via transform (not the gradient's own angle, which isn't animatable without
+     @property/Houdini support) so the halo reads as a soft, living glow rather than a static
+     rainbow ring. */
+  --animate-glow-spin: glow-spin 4s linear infinite;
+
+  /* DotGrid.tsx's "twinkle" — three copies of the same dot pattern, each opacity-animated at a
+     different (deliberately non-round-number-shared) duration. No per-dot DOM/JS: the copies'
+     phases drift relative to each other continuously, which reads as organic/asynchronous
+     twinkling in aggregate without ever needing true per-dot randomness. */
+  --animate-dot-twinkle-a: dot-twinkle-a 7s ease-in-out infinite;
+  --animate-dot-twinkle-b: dot-twinkle-b 9.5s ease-in-out infinite;
+  --animate-dot-twinkle-c: dot-twinkle-c 6.2s ease-in-out infinite;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0d0d0d;
-    --foreground: #ededed;
-    --muted: #9a9a9a;
-    --border: #262626;
-    --surface: #171717;
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scan-line {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes glow-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dot-twinkle-a {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes dot-twinkle-b {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@keyframes dot-twinkle-c {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
   }
 }
 
@@ -39,4 +137,13 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* DotGrid.tsx respects this directly on its animated layers — "twinkling" is decorative motion,
+   never load-bearing for comprehension, so it's exactly the class of animation this should
+   disable entirely rather than just shorten (per the brief's own explicit ask). */
+@media (prefers-reduced-motion: reduce) {
+  .dot-twinkle-layer {
+    animation: none !important;
+  }
 }

@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Argus: AI-powered accountability wallet on Monad. Users create habits, verify completion with
-Gemini, and earn access to spend from a wallet; missing a habit triggers an on-chain penalty
-(save/donate/accountability-partner/surprise). This scaffold covers the **core** of the PRD:
-the Desktop web app, the on-chain contracts, and Supabase. Mobile (Expo) and the Chrome
-extension (Hard Mode enforcement) are not built yet — Hard Mode can be *selected* in setup but
-doesn't block spending without the extension.
+Argus: AI-powered accountability wallet on Monad — not a wallet blocker. Users connect their own
+wallet, deploy a personal Accountability Wallet, and voluntarily commit funds toward habits; the
+wallet itself is never locked, only the amount explicitly committed to a habit is governed.
+Missing a habit moves the committed stake into a locked Savings Vault (still the user's own
+funds, released after a lock period) or donates it, per the user's choice. Habits are verified
+with Gemini. This scaffold covers the **core** of the PRD: the Desktop web app, the on-chain
+contracts, and Supabase. Mobile (Expo) isn't built yet.
 
 Contracts are deployed on Monad testnet; addresses live in `apps/web/.env.local` (gitignored,
 not in git history — see `.env.local.example` for the shape).
@@ -18,7 +19,13 @@ not in git history — see `.env.local.example` for the shape).
 
 ```
 apps/web/          Next.js 16 app — frontend + backend (Next.js API routes, no separate server)
-  hooks/             useAccountabilityWallet — shared vault/asset/balance reads
+  hooks/             useAccountabilityWallet (vault/asset/balance), useUnmirroredHabits (on-chain
+                     vs Supabase drift + active habit count), useCountdownToMidnight /
+                     useCountdownToDeadline (UI-only countdown nudges), useVaultTransfer
+                     (deposit/withdraw — shared by WalletStatus.tsx and ChatSidebar.tsx)
+  lib/proofForensics.ts   perceptual-hash duplicate detection for proof images (sharp-based dHash)
+  lib/verifyChallenge.ts  signed random-gesture challenge tokens for live-capture proof
+  lib/habitCategory.ts    shared (client+server) habit-category inference + proof-type copy
 contracts/          Foundry project — HabitManager, PenaltyEngine, ArgusFactory, AccountabilityWallet, MockUSDC
 packages/supabase/  SQL migrations + schema notes (no ORM — plain SQL + Supabase JS client)
 ```
@@ -43,7 +50,10 @@ npm run lint               # eslint (flat config, includes react-hooks rules —
 npx tsc --noEmit           # typecheck only, faster than a full build
 ```
 
-Inside `contracts/` (requires Foundry — `curl -L https://foundry.paradigm.xyz | bash && foundryup`):
+Inside `contracts/` (requires Foundry — `curl -L https://foundry.paradigm.xyz | bash && foundryup`).
+Foundry's binaries install to `~/.foundry/bin`, which is often **not** on `PATH` in a non-login
+shell — if `forge`/`cast` come back "command not found", run
+`export PATH="$HOME/.foundry/bin:$PATH"` first:
 
 ```bash
 forge build
@@ -73,7 +83,10 @@ won't match) — clear them for any wallet you're actively testing with.
 1. Deploy `PenaltyEngine(deployer, donationAddress)` — `habitManager` address starts unset.
 2. Deploy `HabitManager(deployer, address(penaltyEngine))` — takes PenaltyEngine's address directly.
 3. `penaltyEngine.setHabitManager(address(habitManager))` — settable once, then locked.
-4. Deploy `ArgusFactory(address(habitManager), address(penaltyEngine))`.
+4. Deploy `ArgusFactory(address(habitManager), address(penaltyEngine))` — `habitManager` was
+   dropped from this constructor in an earlier iteration, then added back (along with
+   `AccountabilityWallet`'s) specifically so the vault can read `activeHabitCount` for the
+   Committed-balance formula (see the vault section below).
 5. `habitManager.setFactory(...)` and `penaltyEngine.setFactory(...)` — both settable once.
 6. `habitManager.setVerifier(verifierAddress)`.
 7. (testnet only) Deploy `MockUSDC()` — no wiring needed, it's just a token.
@@ -82,22 +95,87 @@ Any change to these four contracts' constructors needs this sequence re-verified
 `contracts/test/utils/ArgusTestBase.sol` (mirrors the same bootstrap for tests) and
 `script/Deploy.s.sol`.
 
-### Non-custodial, dual-asset vault pattern (why there are 4-5 contracts, not the PRD's 3)
+### Non-custodial vault with three balances (why there are 4-5 contracts, not the PRD's 3)
 
 `ArgusFactory.deployWallet(asset)` deploys a fresh `AccountabilityWallet` per user, **owned
 entirely by that user's wallet address** — Argus never custodies funds or keys. `asset` is
 fixed at deploy time: `address(0)` for native MON, or an ERC-20 address (e.g. `MockUSDC` on
 testnet) — a vault only ever holds one asset, and `deposit()`/`depositERC20()` are separate
-paths that each revert (`WrongAssetPath`) if called on the wrong kind of vault. `withdraw()`
-checks `HabitManager.isUnlockedToday(owner)`; only `PenaltyEngine` may pull funds via
-`executePenalty()`, and only when a day was missed. Frontend looks up a user's vault address
-and asset on-chain via `ArgusFactory.walletOf(user)` / `AccountabilityWallet.asset()` — this is
-the source of truth, not the `accountability_wallet_address` mirror column in Supabase.
-`apps/web/hooks/useAccountabilityWallet.ts` is the one place both reads happen; the home
-screen's balance hero and the Wallet bottom sheet both consume it rather than re-deriving.
+paths that each revert (`WrongAssetPath`) if called on the wrong kind of vault.
+
+Three logical balances (`AccountabilityWallet.sol`'s contract-level doc comment has the full
+design rationale) — only `savingsVaultAmount` is actually stored; the other two are live views
+recomputed on every read, never a separate transaction to keep in sync:
+- **Available** (`availableBalance()`) — withdrawable anytime. The wallet is never locked
+  wallet-wide anymore — that model (the whole vault locked until today's habits were done) was
+  removed along with Hard Mode.
+- **Committed** (`committedAmount()`) — `PenaltyEngine.penaltyAmountOf(owner) *
+  HabitManager.activeHabitCount(owner)`, clamped to whatever the vault can actually cover right
+  now. Multiplied, not flat: a single missed day fails every active habit at once, so a lone
+  habit's stake was never the real worst-case exposure once a user has more than one running —
+  the flat version undercounted a user with, say, 3 habits and only enough stake for one.
+  `HabitManager.activeHabitCount(user)` is a new external view (wrapping the same internal
+  `_activeCount` the 3-habit-cap gotcha below already describes) added specifically so the vault
+  could read it. It's also a *standing* commitment: once a miss moves it into the Savings Vault,
+  the same configured amount immediately re-commits from whatever's left, so the user stays "at
+  risk" going forward with no separate re-commit action — see
+  `AccountabilityWallet.committedAmount()`'s doc comment for a worked example.
+- **Savings Vault** (`savingsVaultAmount` / `savingsVaultUnlockAt`) — what a missed day moved
+  here, still the user's own funds, locked until the unlock timestamp. A *rolling* lock: a new
+  miss while already locked extends the unlock time from now, rather than tracking independent
+  per-tranche timers. Always shown in `WalletStatus.tsx`/`AppHeader.tsx` now, even at 0/not-
+  locked — it previously only rendered once something was already locked, so the mechanic was
+  invisible until a user had already missed a day.
+
+**Onboarding requires funding before any habit exists.** `SetupFlow.tsx`'s step order is
+`profile → penalty → wallet → habit → done` — deploying the vault and depositing at least one
+habit's worth of stake (Continue stays disabled until `availableBalance() >= stakeAmount`) now
+happens before a user can create their first on-chain habit, closing a real gap where someone
+could create a habit and start uploading proof with zero funds actually at risk. The dashboard's
+"+ Add Habit" (`HabitList.tsx`) enforces the same available-balance check for every habit added
+after the first, alongside the existing 3-habit cap.
+
+`withdraw()` checks only `availableBalance()` and never touches `HabitManager` itself.
+`habitManager` is present in the constructor again (see the deploy order above), but solely so
+`committedAmount()` can read `activeHabitCount` — `isUnlockedToday()`'s old wallet-wide gating
+role is still gone for good; this is a narrower read-only dependency, not a revival of Hard Mode.
+Only `PenaltyEngine` may move funds, via `executePenalty()` (Donate — an actual transfer out) or
+`moveToSavingsVault()` (re-earmarks in place; funds never leave the contract). Frontend looks up
+a user's vault address and asset on-chain via `ArgusFactory.walletOf(user)` /
+`AccountabilityWallet.asset()` — this is the source of truth, not the
+`accountability_wallet_address` mirror column in Supabase. `apps/web/hooks/
+useAccountabilityWallet.ts` is the one place every one of these reads happens (balance,
+available, committed, savings vault amount + unlock time); the home screen's balance hero and
+the Wallet modal both consume it rather than re-deriving. Never render a bare "0.00 USDC" as a
+stand-in for "no vault" — that was a real reported bug (`symbol` defaulted to `"USDC"` whenever
+`assetAddress` was undefined). A related but distinct bug: before `assetAddress`'s own on-chain
+read resolves, `isNative` briefly reads `false` even for a native vault (since `undefined !==
+NATIVE_ASSET`), so amounts get formatted with the wrong decimals (6 instead of 18) for a moment —
+a real reported "100000000 USDC" on first load, an inflation of `10^12`. `useAccountabilityWallet.ts`
+now exposes `balancesLoading` (true until `assetAddress !== undefined`) and every balance-reading
+query is gated on it; consumers (`AppHeader.tsx`, `WalletStatus.tsx`, `SettingsSheet.tsx`) show a
+neutral "…" during that window instead of a number computed against still-resolving decimals.
+`components/WalletStatus.tsx`'s `WalletHeaderRow` (address pill with copy/explorer-link/
+disconnect icons) is shared between the header hover tooltip and the Wallet modal — disconnect
+lives only here, not in Settings.
 
 **MockUSDC is testnet-only** (open `mint()`, 6 decimals) — `Deploy.s.sol`'s `deployMockUsdc`
 flag must be `false` on mainnet; point `NEXT_PUBLIC_USDC_ADDRESS` at real USDC there instead.
+The frontend's own mint-100-test-USDC button (`WalletStatus.tsx`) is gated on
+`process.env.NODE_ENV !== "production"` in addition to `isMockUsdc` — never renders in a real
+build/deploy (testnet or mainnet demo), only under `npm run dev`.
+
+### Consequences: Savings Vault (recommended) or Donate — only two now
+
+`PenaltyEngine.PenaltyType` is `{ SavingsVault, Donate }` — Accountability Partner and the
+"Shuffle/Raffle" (Surprise) types from an earlier iteration were removed entirely: contracts,
+frontend (`lib/penalty.ts`), and Supabase's `penalty_configs.penalty_type` check constraint all
+match this 2-value enum now (see `packages/supabase/migrations/0005_drop_wallet_mode_add_proof_type.sql`
+for the data migration off the old values — existing `save`/`partner`/`surprise` rows become
+`savingsVault`, never silently `donate`, since that would change what happens to a user's money
+without their choosing it). `configurePenalty(PenaltyType, amount)` — no more `partner` address
+param. `PenaltyEngine.execute(user)` reads the amount fresh from the wallet's own
+`committedAmount()` (not a value stored in `PenaltyEngine` itself) before moving it.
 
 ### On-chain vs off-chain split — habit *names* are Supabase-only, on purpose
 
@@ -111,6 +189,19 @@ tamper-proof (completion, unlock state, streak, fund movement), it's on-chain; e
 (names, display data, chat, images) is Supabase. `habits.contract_index` must match the
 on-chain index exactly — off-chain rows are written only after the corresponding on-chain tx
 confirms (see `apps/web/components/SetupFlow.tsx` and `app/api/habits/route.ts`).
+
+Two more habit fields follow this same off-chain-only rule, both **optional and purely
+informational — neither is enforced on-chain**: `habits.target_days` (a commitment-length
+countdown, e.g. "21 days left," set via `HabitDurationPicker.tsx`) and `habits.deadline_time`
+(a recurring daily "complete by HH:MM" nudge, migration `0004_habit_deadline_time.sql`, set via
+`HabitDeadlineTimePicker.tsx`). Once a habit's own `deadline_time` passes today,
+`HabitList.tsx`'s "Upload Proof" button swaps to a disabled "Missed" pill
+(`hooks/useCountdownToDeadline.ts`) — this is a self-discipline UI signal only; the real penalty
+still only fires at the actual UTC-midnight settlement via `HabitManager.settle()`, unchanged
+regardless of the local deadline time. This was an explicit scope decision (asked directly,
+user chose UI-only over wiring the deadline into real on-chain enforcement) — don't silently
+upgrade it to affect settlement without checking first, since a timezone bug there would move
+real funds.
 
 ### Auth: wallet-signature only, no Supabase Auth
 
@@ -127,28 +218,287 @@ A valid session is *not* proof a `users` row exists — see the FK gotcha below.
 fails the whole sign-in if the `users` insert fails, but the row can still vanish later
 (dashboard edits during testing, etc.), so every route with a `users`-FK write calls
 `ensureUser()` (`lib/supabase/server.ts`) first, an idempotent upsert that self-heals a missing
-row without clobbering an existing one's `display_name`/`wallet_mode`.
+row without clobbering an existing one's `display_name`.
 
 ### AI has exactly two jobs (`apps/web/lib/gemini.ts`)
 
-1. `verifyHabitProof` — Gemini 2.5 Flash with `responseSchema` (structured JSON output:
-   `{verified, confidence, reason}`). Business logic must never depend on free-form text.
+1. `verifyHabitProof` — Gemini, `responseSchema` (structured JSON output: `{verified,
+   confidence, reason, challengePassed}`). Business logic must never depend on free-form text.
    `POST /api/verify` uploads the proof image to the Supabase `proofs` storage bucket, calls
-   this, and — if `verified && confidence >= 0.7` — relays `HabitManager.completeHabit()`
-   on-chain using a separate backend "verifier" signer (`VERIFIER_PRIVATE_KEY` in
-   `lib/chain.ts`, distinct from the contracts' `owner`/deployer key; holds no user funds).
+   this, and — if `verified && (proofType === "appSummary" || challengePassed) && confidence >=
+   CONFIDENCE_THRESHOLD` (0.8) — relays `HabitManager.completeHabit()` on-chain using a separate
+   backend "verifier" signer (`VERIFIER_PRIVATE_KEY` in `lib/chain.ts`, distinct from the
+   contracts' `owner`/deployer key; holds no user funds). Two submission paths scored by the same
+   call: `proofType: "camera"` (default/fallback, requires the gesture `challenge` to match) and
+   `proofType: "appSummary"` (explicit second path for a screenshot of an app-generated summary —
+   Strava, WakaTime, Kindle, etc. — no gesture to check, so `challengePassed` is always true for
+   it; Gemini's own scrutiny of the screenshot's plausibility is the safety net instead). The
+   prompt is sharpened per habit via `inferHabitCategory(habitName)` (`lib/habitCategory.ts` —
+   shared with the client, no `server-only` marker, so `LiveCameraCapture.tsx` can show the same
+   category-aware hint; keyword match → running/gym/reading/coding/meditation/journaling/
+   studying/generic), each category getting its own accept/reject guidance for both submission
+   paths (`CATEGORY_GUIDANCE_CAMERA` / `CATEGORY_GUIDANCE_APP_SUMMARY` in `lib/gemini.ts`) — see
+   the anti-cheat pipeline below for how `challenge` gets into this call.
 2. `progressCoachReply` — explains the user's own structured data back to them via a system
    instruction that explicitly refuses unrelated questions. Never a general-purpose assistant.
-   This is the home screen's primary interface (`components/ChatHero.tsx`), not a side panel.
+   Also does function-calling for five agentic actions (see the section right below) — the user
+   still confirms (and, for on-chain ones, signs) client-side; the model never executes anything
+   directly. The system instruction's habit-cap description must stay in sync with the contract:
+   it currently says a user can have at most 3 **active** habits (count only `active: true` rows
+   in the data it's given) and that deactivating one frees a slot — this was a real live bug once
+   (the instruction said "3 is a lifetime limit, deactivating never frees a slot" after the
+   contract had already been changed to active-count-based capacity, so the AI refused every
+   new-habit request). If `HabitManager`'s cap logic changes again, update this string in the
+   same commit. Surfaced via `components/ChatSidebar.tsx`, a fixed right-docked panel, not the
+   home screen's dominant element (see below).
 
-### Home screen: hero + bottom sheets, not a static dashboard
+### Progress Coach's agentic actions — propose server-verified, never execute directly
 
-`app/page.tsx`'s signed-in view is a centered balance hero (big number, `LOCKED`/`UNLOCKED` +
-streak caption) with `ChatHero` as the dominant element below it — habits and wallet
-controls are *not* rendered inline; two chips open `components/BottomSheet.tsx` (portal to
-`document.body`, backdrop, slide-up transition) containing `HabitList` / `WalletStatus`
-respectively. If you're adding a new dashboard feature, default to a bottom sheet over a new
-inline section unless there's a specific reason it needs to always be visible.
+Six function-calling tools (`lib/gemini.ts`): `createHabit`, `editHabit` (rename),
+`deactivateHabit`, `deposit`, `setStake`, `withdraw`. Every one only *proposes* —
+`ProgressCoachResult.proposedActions` is always an array (possibly empty, never a single
+optional value), and the model is **never trusted with a real on-chain index or enum**:
+`editHabit`/`deactivateHabit` only ever take a `habitName` string, and `setStake` only ever takes
+an `amount` — `app/api/chat/route.ts`'s `POST` handler resolves `habitName` to a real
+`contractIndex` server-side (a case-insensitive match against the same `habits` rows already
+fetched for context) and resolves `setStake`'s `penaltyType`/`assetSymbol`/`assetDecimals` from
+the already-fetched `penalty` row (same `?? "savingsVault"` / `?? "MON"` / `?? 18` defaults
+`contextJson` already uses) — neither ever reaches the client as something the model chose. A
+`habitName` match failure is silently dropped from the array rather than erroring; every other
+action type always resolves.
+
+**`deposit` and `setStake` are easy to conflate and are NOT interchangeable** — this was a real
+reported bug: asking for "commit 0.5 MON to my accountability wallet" got silently routed onto
+`deposit` (the only funds-related tool that existed at the time), which only ever adds to
+Available and never touches the actual per-habit stake. `deposit` moves funds into the vault;
+`setStake` changes the configured per-habit amount that `wallet.committed` scales from (via
+`PenaltyEngine.configurePenalty`) and moves no funds at all. The system instruction now
+explicitly tells the model "commit"/"stake"/"pledge" language means `setStake`, not `deposit`,
+even if the user also says "wallet" in the same sentence. `hooks/useSetStake.ts` is the shared
+hook (extracted out of `SettingsSheet.tsx`'s inline `configurePenalty` + `/api/penalty` mirror
+sequence) both the settings UI and the chat-confirm flow call.
+
+**A single message can propose more than one action** (e.g. "deposit 1 and commit 0.5") —
+`progressCoachReply` used to read only `response.functionCalls?.[0]`, silently dropping every
+action past the first even though Gemini's default AUTO function-calling mode can return several
+calls in one turn for a compound request. It now loops the full `functionCalls` array into
+`proposedActions`, and `ChatSidebar.tsx`'s `Message.proposedActions`/`actionResolutions` are both
+arrays (parallel, same index) so each proposed action within one reply gets its own label and
+Confirm/Dismiss control, resolved independently — `resolveAction(messageIndex, actionIndex,
+confirm)` takes both indices now, not just one.
+
+`components/ChatSidebar.tsx`'s `resolveAction()` dispatches each confirmed action to the exact
+same shared hooks the non-chat UI uses — no separate on-chain logic exists for the chat path:
+`hooks/useCreateHabit.ts`, `hooks/useRenameHabit.ts` (pure Supabase write, no wallet signature),
+`hooks/useDeleteHabit.ts`, `hooks/useSetStake.ts`, and `hooks/useVaultTransfer.ts` (extracted out
+of `WalletStatus.tsx`'s inline deposit/withdraw logic once the chat path needed the exact same
+ERC-20 approve-then-deposit dance; `WalletStatus.tsx` now consumes it too instead of duplicating
+it).
+
+The coach's context (`app/api/chat/route.ts`) was expanded well beyond the original
+name/streak/penalty set to make these actions (and richer Q&A) possible:
+- `habit_completions` (last 30 rows, `contract_index/day/verified/confidence/reason`) as
+  `recentCompletions` — lets it explain a specific rejection using the real `reason`, or
+  synthesize a recap, instead of only ever seeing aggregate streak numbers.
+- `habits.target_days`/`deadline_time` are now included, not just `name`/`active`.
+- `lib/chain.ts`'s `getVaultSnapshot(user)` — an on-chain read (`ArgusFactory.walletOf` →
+  `AccountabilityWallet.balanceOf`/`availableBalance`/`committedAmount`) surfaced as `wallet` in
+  context, specifically so the coach knows `available` before proposing a `withdraw` — a
+  Committed or still-locked Savings-Vault amount would just revert on-chain otherwise, and the
+  system instruction tells it to say so plainly instead of proposing an action that will fail.
+  Decimals for a non-native asset are hardcoded to `6` here rather than an extra `decimals()` RPC
+  read (same assumption `mintTestUsdc` already makes) — this snapshot is fetched fresh on every
+  `/api/chat` call, so that extra sequential round-trip was a real, measurable latency cost on
+  every single reply.
+- If the most recent proof (today or yesterday) was rejected, `app/api/chat/route.ts` downloads
+  that image from the `proofs` bucket and attaches it as a multimodal part to the *next* chat
+  call (`createPartFromBase64`, same helper `verifyHabitProof` uses) — so "why was that
+  rejected" can reference what's actually in the photo, not just repeat the stored `reason`
+  string. Bounded to a 2-day window, and only downloaded when the user's message plausibly asks
+  about it (a cheap keyword check — `reject`/`why`/`photo`/`proof`/`fail`) — this used to be
+  unconditional within the window, adding a Storage round-trip to every turn (even "what's my
+  streak") for as long as a rejection sat in that window, another real latency cost.
+
+`components/ChatSidebar.tsx` also gained quick-action chips (populate + immediately send) in the
+empty-conversation state, and a 3-dot typing indicator while awaiting a reply. **True token
+streaming was deliberately not built** — it would need the function-call detection and the
+`after()`-based `chat_messages` write to both work against a partial/growing response, real
+added complexity for what was the lowest-priority item when this was scoped; flagged as a
+separate future enhancement if wanted.
+
+### Proof anti-cheat pipeline — live capture, challenge token, perceptual hash
+
+Deliberately lean (no GPS, no Apple Health, no human review, no timelapse, no OCR, nothing
+beyond already-installed deps / free packages) — modeled as a lighter alternative to more
+built-out competitors, not a full fraud-proofing system:
+
+- **Live camera only, not a file picker.** `components/LiveCameraCapture.tsx` is a hand-rolled
+  `getUserMedia` capture (no third-party camera library) — a `<video>` preview, a "Capture"
+  button that draws the current frame to an off-screen `<canvas>` and encodes a JPEG. A 3-second
+  countdown (`CAPTURE_COUNTDOWN_SECONDS`) starts on tap so the user has time to get into pose for
+  the gesture challenge before the frame is actually grabbed. Gallery upload is still available
+  as a persistent, equally-scrutinized option (not gated behind a camera-error fallback) — the
+  UI just nudges "using the camera gets approved faster"; the backend applies the same duplicate-
+  hash and challenge checks either way, only recording `via_gallery_fallback` for audit, never
+  using it to relax verification.
+- **Random gesture challenge**, server-issued and server-verified, not client-echoed.
+  `GET /api/verify/challenge?contractIndex=N` picks a random gesture ("hold up two fingers,"
+  etc.) and signs a short-lived (`jose`, 5-min TTL) token binding `{wallet, contractIndex,
+  challenge}` (`lib/verifyChallenge.ts`). The client shows the challenge as an on-screen
+  instruction and submits the token back untouched with the capture; `/api/verify` verifies the
+  token's signature/expiry/wallet/contractIndex match and uses the challenge *from the token*,
+  never a client-supplied plain value, when calling Gemini — a client can't claim a convenient
+  challenge for a pre-made image.
+- **Perceptual-hash duplicate detection** as a backstop (the live-capture + challenge
+  combination already rules out most stale/stock photos). `lib/proofForensics.ts`'s
+  `computeImageHash` (sharp-based dHash) runs on every upload before Gemini is even called;
+  `hammingDistance` against every `habit_completions.image_hash` with a non-null value **across
+  all users** (not just the current one) — a match under `DUPLICATE_HASH_THRESHOLD` short-circuits
+  the flow, skipping the Gemini call entirely (saves quota) and rejecting without revealing whose
+  earlier submission it matched. Runs regardless of `proofType`.
+- **Explicit second submission path for app-generated evidence.** Per the product doc's
+  "prioritize activity evidence over posed photos" principle, a screenshot of an app summary
+  (running app, WakaTime, Kindle, etc.) is often stronger evidence than a photo for some habits.
+  `LiveCameraCapture.tsx` shows a category-aware hint (`lib/habitCategory.ts`'s
+  `CATEGORY_PROOF_HINT`) next to a distinct "Submit an app summary instead" file picker, separate
+  from the plain photo-upload fallback — this sets `proofType: "appSummary"` on the request,
+  which skips the gesture-challenge requirement (a screenshot can't show a live gesture) but
+  still goes through Gemini's category-specific scrutiny and the perceptual-hash check above. The
+  live camera stays the default and fallback for every habit — this is guidance, not a gate; no
+  third-party OAuth/API integrations, Gemini vision interprets the screenshot directly.
+
+`packages/supabase/migrations/0003_proof_image_hash.sql` adds `habit_completions.image_hash`
+and `via_gallery_fallback`; `0005_drop_wallet_mode_add_proof_type.sql` adds
+`habit_completions.proof_type` (`'camera' | 'appSummary'`) — like every migration here, both
+must be applied manually (see the migrations gotcha below).
+
+### Home screen: habit-focused, chat as a fixed side panel
+
+`app/page.tsx`'s signed-in view is habit-first, not a balance hero: `components/AppHeader.tsx`
+(logo, streak pill, balance pill, settings — page-level chrome, always mounted) sits above the
+main `bg-card rounded-3xl` container, which is `relative overflow-hidden` specifically so it can
+host two purely decorative background layers, `components/GlowBackground.tsx` and
+`components/DotGrid.tsx`, both `absolute inset-0` and mounted first so every real child needs
+`relative z-10` to stack above them: `GlowBackground` is a static, blurred multi-color radial
+glow rising from bottom-center (reuses the exact palette from the "Chat with Argus" hover glow
+below, on purpose, so the two glow moments feel related) that fades to transparent rather than
+painting an explicit "near black," so it never risks a seam against `--card`'s real value.
+`DotGrid` is an animated dot pattern — not per-dot DOM/JS (would need thousands of nodes or a
+canvas loop for true per-dot randomness), instead three stacked copies of the same CSS
+repeating-dot background, each opacity-animated at a different duration (`--animate-dot-twinkle-
+a/b/c`, `app/globals.css`) so their phases drift apart continuously; reads as organic
+non-synchronized twinkling in aggregate. Both respect `prefers-reduced-motion` (the twinkle
+keyframes are disabled via a `.dot-twinkle-layer` media-query rule) and are `pointer-events-none`
++ `aria-hidden`. Above these, the real content: a short welcome/summary line, a compact stat row
+(habits remaining, committed today, time left — a scannable companion to the sentence above it,
+not a replacement),
+`components/InsightCard.tsx`, a "Chat with Argus" CTA, and a day-grouped `HabitList` (today's
+incomplete habits with "Upload Proof", then past days newest-first with a "Completed"/"Missed"
+status pill — see `app/api/habits/history/route.ts` and `hooks/useCountdownToMidnight.ts` for
+the live countdown-to-midnight on today's row, also reused directly in `page.tsx` for the stat
+row's "time left" pill). `InsightCard.tsx` shows a deterministic, non-AI-call sentence from
+`lib/insight.ts` — computed **client-side** from `state.recentCompletionTimestamps`
+(`/api/state` returns the last 30 verified `habit_completions.created_at` values, raw) so
+"usual completion hour" reflects the signed-in user's own browser timezone, not the server's;
+deliberately not a live Gemini call on every dashboard load, consistent with this session's
+separate work to *cut* AI latency elsewhere (see the chat-coach section below). Fewer than 5
+data points get a generic encouraging default instead of a shaky statistical claim.
+
+The home screen only ever shows the last 4 days (today + 3) — `app/api/habits/history/route.ts`
+defaults to `HOME_WINDOW_DAYS`, and every non-today group renders collapsed by default (today
+always expanded, un-toggleable). A longer, unbounded range (back to the wallet's on-chain
+`startDay`) lives in `components/HistoryModal.tsx`, opened via a "View full history" link, using
+the same route's `?window=full`. Both consume `components/HabitDayGroups.tsx`'s `DayGroupsList` —
+the shared day-group/collapse/`HabitRow` rendering extracted once a second consumer needed it, so
+the two views can't drift. The history route itself includes a habit on a given day if it
+*existed* by then (`created_at`-derived), not whether it's *currently* active — this was a real
+bug fix: filtering to only-currently-active habits made a past day's one missed habit vanish
+entirely once deactivated, so the day would render as vacuously "Completed." A verified habit's
+row can no longer be edited (the pencil icon is hidden once `habit.verified`) and renders at
+reduced opacity — editing/renaming something already proved for the day was confusing, with no
+way to tell which name applied when it was proved.
+
+**Today auto-resolves once every active habit is individually settled**, without waiting for
+real UTC midnight. `HabitDayGroups.tsx`'s `allResolvedToday` (and `app/page.tsx`'s mirrored
+`allResolvedToday`/`anyMissedToday`, feeding the welcome-line summary) treat a habit as resolved
+once it's `verified` or its own `deadline_time` has passed —
+`hooks/useCountdownToDeadline.ts`'s `computeCountdown` is exported as a plain function
+specifically so this day-group-level `.every()` check can reuse the same date math without
+calling a hook inside a loop. Once every active habit is resolved, the day's pill swaps from the
+live countdown straight to Completed/Missed. A habit with no `deadline_time` set can only ever
+resolve via `verified`, so it keeps the whole day counting down regardless of the others until
+real midnight — same "UI-only, not real enforcement" caveat as `deadline_time` itself: the actual
+penalty only ever fires at `HabitManager.settle()`'s real UTC-midnight boundary.
+
+Clicking "Chat with Argus" opens `components/ChatSidebar.tsx` — a `position: fixed`, full-height
+right dock, `CHAT_SIDEBAR_WIDTH` (530px, exported from that file) wide at the `sm:` breakpoint and
+up, **full-viewport-width below it** (`w-full sm:w-[530px]`) — a hardcoded 530px panel would be
+unusable on any phone-width screen. It is **not** a flex sibling and does not narrow the main card
+directly; instead the page wrapper in `app/page.tsx` reserves that same width as `padding-right`
+only at `sm:`+ (`chatOpen ? "sm:pr-[530px]" : "sm:pr-0"` — a class toggle, not the inline style
+this used to be, specifically so the padding never applies below `sm:`, where the panel is already
+full-width and there's nothing to push away from), which shifts the header and main content left
+together on desktop so nothing (including the header's pills) ever sits underneath the fixed
+panel. This is the standard AI-chat-sidebar pattern (Notion AI, Cursor, Intercom) — pinned to the
+viewport, unaffected by page scroll. Kept always-mounted so the conversation survives collapsing
+the panel. Message rendering follows the current ChatGPT/Claude.ai convention: user turns get a
+`rounded-3xl` bubble (`bg-foreground`, right-aligned via `flex justify-end`, not the old
+`text-align` + `inline-block` approach, which could render an oddly-clipped corner on wrapped
+text), assistant turns are plain flowing text with **no** bubble — a colored box reads fine for a
+short user message but wraps a longer, often multi-paragraph reply in an odd-looking box instead
+of just reading as text.
+
+A single refresh button lives in `AppHeader.tsx` (not duplicated elsewhere) and refreshes
+everything: its own wallet/streak reads directly, plus `onRefreshAll` bumps a `refreshToken`
+number prop on `HabitList.tsx` (whose habit/history fetch depends on it, re-triggering from a
+sibling component) and calls `app/page.tsx`'s `loadState()` for `/api/state`. `components/
+WelcomeModal.tsx` is a one-time, four-step intro to how accountability works here, gated on a
+`localStorage` flag (`argus_welcome_seen`) rather than a Supabase column — purely cosmetic, no
+migration needed, resets if the user clears browser data (an accepted trade-off for something
+this low-stakes).
+
+`components/Modal.tsx` (portal to `document.body`, centered, backdrop) is the **only** overlay
+pattern — used for Habits history detail, Settings, Wallet, Streak, and habit recovery.
+`BottomSheet.tsx` was deleted; don't reintroduce a second overlay mechanism without a specific
+reason. It takes an optional `dismissible` prop (default `true`); pass `false` to hide the Close
+link and disable backdrop-click/Escape — used by `RecoverHabitsModal.tsx` so a user can't dodge
+naming an orphaned on-chain habit by dismissing the modal.
+
+Habit creation has two entry points beyond onboarding: `components/AddHabitModal.tsx` (the "+
+Add Habit" button next to the Habits heading, gated on active on-chain habit count — see the
+gotcha below) and via chat (Gemini proposes `createHabit`, user confirms, same
+`hooks/useCreateHabit.ts` executes the write either way). Both go through
+`components/HabitDurationPicker.tsx` (optional commitment length) and
+`components/HabitDeadlineTimePicker.tsx` (optional recurring daily deadline time) — see the
+off-chain metadata note above.
+
+### Orphaned on-chain habit recovery
+
+A habit's on-chain `createHabit()` tx can succeed while the Supabase mirror write fails (stale
+session, a missing migration column — this has happened live) — `HabitManager` has no reset and
+no dedupe, so retrying "Create habit" in that state creates a *second* orphaned on-chain slot
+rather than fixing the first. `hooks/useUnmirroredHabits.ts` scans on-chain `habitCount` /
+`habitActive` against `/api/habits`'s rows to detect any active, unnamed index — used both by
+`SetupFlow.tsx` (onboarding, inline recovery form) and, importantly, by `HabitList.tsx` on every
+ongoing dashboard load (`RecoverHabitsModal.tsx`, non-dismissible), since the same failure mode
+can happen any time "+ Add Habit" is used later, not just during setup. The same hook's
+`activeCount` is also what gates "+ Add Habit" itself (see the habit-cap gotcha below).
+
+### Mobile responsiveness
+
+The app had essentially zero mobile handling until a dedicated pass added it — worth knowing
+because most components still default to a single, unconditional class list, and any new one
+should consider a phone-width viewport from the start rather than needing a second retrofit pass.
+`app/layout.tsx` has an explicit `viewport` export (`width: "device-width", initialScale: 1`) —
+prerequisite for anything else to render at the right scale. The breakpoint strategy is additive
+`sm:` classes on existing elements, not a parallel mobile layout: `ChatSidebar.tsx` goes
+full-width below `sm:` (see above); `AppHeader.tsx`'s pill row gets `flex-wrap` plus a
+`max-w-[7rem] sm:max-w-none truncate` guard on the balance pill so a long formatted balance can't
+blow out the row at 320–375px; `HabitDayGroups.tsx`'s `HabitRow` wraps the habit name in `min-w-0
+flex-1 truncate` (previously unconstrained against a `shrink-0` action-button cluster — a real
+overflow risk with a long habit name on a narrow screen). `SetupFlow.tsx`'s 2-column penalty-type
+grid was checked and left as-is — not actually overflow-prone down to ~320px, so no breakpoint
+restructure was justified there.
 
 ### Chain config
 
@@ -158,25 +508,159 @@ from `wagmi/chains` / `viem/chains` directly — never hand-define these chain o
 addresses come from `NEXT_PUBLIC_HABIT_MANAGER_ADDRESS` / `NEXT_PUBLIC_PENALTY_ENGINE_ADDRESS`
 / `NEXT_PUBLIC_ARGUS_FACTORY_ADDRESS` / `NEXT_PUBLIC_USDC_ADDRESS` (`lib/contracts.ts`).
 
-### Design constraints (PRD, current phase only)
+### Design constraints (Figma spec, current phase)
 
-White / black / grey only — no gradients, no glassmorphism, no decorative UI or unnecessary
-animation. Closer to ChatGPT than a crypto dashboard. See `apps/web/app/globals.css` for the
-CSS variables (`--background`, `--foreground`, `--muted`, `--border`, `--surface`).
+Dark-only theme, no light mode. Exact tokens in `apps/web/app/globals.css`: background
+`#141514`, card `#111211`, translucent white pill/surface fill `rgba(255,255,255,0.04)`
+(`--surface`), divider `rgba(255,255,255,0.2)` (`--border`), plus three accents — coral
+`#FE7667` (`--warning`, used for today's countdown / "Missed"), mint `#67FE90` (`--success`,
+used for "Completed"), and amber `#FDBA3B` (`--flame`, reserved for exactly two
+gamification/AI-flavored spots: `AppHeader.tsx`'s streak-flame badge and `InsightCard.tsx` — not
+a general-purpose accent, don't reach for it elsewhere without a similar reason). Text uses
+opacity tiers on white rather than separate grey colors (`--muted` = 0.6; several one-off
+opacity classes like `text-white/45` are used inline for tiers the token set doesn't cover —
+check `HabitList.tsx`/`page.tsx` before adding a new one).
+
+Fonts: `Rakkas` for the "Argus" wordmark only (`font-display`), `DM Sans` for everything else
+(`next/font/google`, wired in `app/layout.tsx`).
+
+**No outlines/borders anywhere** — selection state and grouping are shown by fill
+(`bg-foreground text-background` vs `bg-surface`) or opacity, never a border, with exactly two
+intentional exceptions: the per-day divider inside `HabitDayGroups.tsx` (deliberately fainter,
+`border-white/10`, than the section-level one) and the single divider under the "Habits" section
+heading in `HabitList.tsx` (`border-t border-border`) — `ChatSidebar.tsx`'s old composer divider
+was removed as part of its floating-composer redesign (see below), so the exception count stayed
+at two rather than growing. If you add a new component, don't reach for `border` as a default —
+check how the existing ones distinguish state first.
+
+Icons: `@phosphor-icons/react` exclusively (`weight="fill"` for filled marks like `Eye`/`Fire`/
+`GearSix`, `weight="bold"` for line marks like `ArrowUp`/`ArrowLeft`/`CaretDoubleRight`) — no
+hand-rolled inline SVGs or unicode glyphs (↑, ←, », ↗) for anything icon-shaped.
+
+Native `<input type="date">` / `<input type="time">` (in `HabitDurationPicker.tsx` /
+`HabitDeadlineTimePicker.tsx`) over hand-rolled pickers — deliberate, to get a real
+industry-standard picker UI without a much bigger custom-component build. Add
+`[color-scheme:dark]` to them so the native picker itself renders dark, matching the rest of the
+theme instead of popping up as a jarring light-mode control.
+
+Hover-revealed controls (the Wallet modal's disconnect icon, header balance-pill breakdown,
+`StreakPanel.tsx`'s download button, and `HabitDayGroups.tsx`'s Upload Proof/Edit-icon reveal)
+use Tailwind's `group`/`group-hover` with an opacity transition — no JS hover state. Every one of
+these is now also gated behind a `[@media(hover:hover)]:` arbitrary variant, e.g.
+`[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100` — touch devices
+have no reliable hover state, so without this gate a hover-revealed control (especially Upload
+Proof, a primary CTA) would be permanently invisible on a phone. This was a real gap found during
+the mobile-responsiveness pass: `StreakPanel.tsx`'s download button had no touch fallback at all
+before this. `components/Tooltip.tsx` is the one exception that's genuinely tap-accessible
+without the media-query gate — it toggles on click (works everywhere) *and* peeks on hover
+(desktop-only, media-gated), rather than being hover-only. This only reacts to *real* pointer
+events; a synthetic `element.dispatchEvent(new MouseEvent(...))` in a test/automation context
+will not trigger the hover variants.
+
+### Design-polish primitives (`Spinner.tsx` / `Toast.tsx` / `Tooltip.tsx`, `ease-emil-out`)
+
+Added during a full UI-polish pass (emil-design-eng skill) — three small, dependency-free shared
+components, no framer-motion or other animation library installed, pure CSS transitions/
+keyframes throughout:
+- **`components/Spinner.tsx`** — Phosphor `CircleNotch` + Tailwind's built-in `animate-spin`.
+  Paired with (not replacing) every existing inline busy-text state across the app ("Saving…",
+  "Confirm in wallet…", etc.) — the text still says what's pending, the spinner adds the missing
+  motion cue.
+- **`components/Toast.tsx`** — `ToastProvider` (mounted once in `app/providers.tsx`) +
+  `useToast()`. Success-acknowledgment only (habit created, deposit confirmed, settings saved,
+  chat-confirmed actions, proof verified/rejected) — existing inline error text
+  (`text-xs text-red-500`) is untouched and still the pattern for failures, since those shouldn't
+  auto-dismiss.
+- **`components/Tooltip.tsx`** — click-toggled (touch-safe) + hover-peek (media-gated, desktop).
+  Applied at a curated set of confusing spots rather than everywhere: `WalletStatus.tsx`'s
+  Available/Committed/Savings Vault rows (this is what actually explains "Committed reads 0
+  despite a configured stake" — Committed is `stake × active habit count`, so it's correctly 0
+  with no habits yet), `SettingsSheet.tsx`'s penalty section, `DeployWalletForm.tsx`'s asset
+  picker.
+- **`--ease-emil-out: cubic-bezier(0.23, 1, 0.32, 1)`** (`app/globals.css`, registered in
+  `@theme inline` so it's usable as the `ease-emil-out` class) — a stronger, more intentional
+  curve than Tailwind's built-in `ease-out`. Used everywhere in place of `ease-out` now. Paired
+  with a standard press-feedback class string, `transition-transform duration-150 ease-emil-out
+  active:scale-[0.97]`, applied directly (not abstracted into a utility) to essentially every
+  clickable button in the app.
+- `--animate-modal-in` / `--animate-toast-in` / `--animate-scan-line` / `--animate-glow-spin`
+  (same file) back four more keyframes: `Modal.tsx`/`ConfirmDialog.tsx`'s mount-in (opacity +
+  `scale(0.95→1)`, never `scale(0)`), the toast stack's entrance, `LiveCameraCapture.tsx`'s
+  scanning-sweep overlay shown over a captured photo while Gemini verifies it, and the "Chat with
+  Argus" button's hover glow (a blurred, rotating conic-gradient clipped to the button's own
+  `overflow-hidden rounded-full` shape, not bleeding onto the page around it).
+
+`Modal.tsx`'s Close control changed from a muted underlined "Close" text link to a Phosphor `X`
+icon button, top-right, and its backdrop went from flat `bg-black/50` to `bg-black/60
+backdrop-blur-sm`. `ConfirmDialog.tsx` (a separate, historically inconsistent overlay
+implementation) was brought in line with the same backdrop/radius/title treatment — **but
+deliberately did not get a close icon**: its lack of any dismiss affordance beyond
+Cancel/Confirm is a safety property for on-chain-affecting confirmations, not an oversight.
+
+`SettingsSheet.tsx`'s display-name field lost its own inline Save button — a single "Save
+Settings" button at the bottom now covers both fields, but the two underlying operations stay
+genuinely different under the hood: a name-only change saves directly (still a plain off-chain
+write, still no confirmation needed), while a stake/penalty-type change still opens the same
+`ConfirmDialog` on-chain safety prompt as before (only the entry point was unified, not the
+safety gate). `nameDirty`/`penaltyDirty` are tracked against the initial snapshot to decide which
+path a click takes; if both changed, the name saves first (before the wallet-signature prompt) so
+a rejected/cancelled signature doesn't lose an already-valid name change, and `nameError`/
+`penaltyError` stay independent so a partial success is still visible rather than reading as
+"nothing happened."
 
 ## Known gaps (intentional, not yet built)
 
-- No keeper calls `HabitManager.settle()` daily — needs a cron (e.g. Vercel Cron hitting a new
-  `/api/cron/settle` route) before this is a real daily loop instead of a manual one.
-- `PenaltyEngine`'s Surprise type resolves via `block.prevrandao`-based pseudo-randomness —
-  manipulable by a block producer within a narrow window. Acceptable for small self-imposed
-  hackathon stakes; swap for a VRF before real value is at stake.
-- Hard Mode is selectable in setup but the Chrome Extension that would actually block spending
-  doesn't exist yet — habits/streaks still track fully on-chain in that mode, penalties just
-  don't move funds (no vault gets deployed).
+- ~~No real cron calls `HabitManager.settle()` daily~~ — **closed.** `app/api/cron/settle/route.ts`
+  (gated by a `CRON_SECRET` bearer-token check, since it acts across every wallet rather than a
+  single session) loops `lib/chain.ts`'s `settlePendingDays()` over every wallet with an active
+  habit; `vercel.json` registers it to run once daily shortly after UTC midnight. This was the
+  root cause behind two related live reports — penalties not firing and streaks looking stale —
+  since previously nothing settled a day unless a user happened to open the app or verify a habit
+  around that day's boundary. The opportunistic calls from `/api/state` and `/api/verify` (via
+  `after()`, so they don't block the response) still exist too, as a faster same-session
+  catch-up; the cron is the backstop for wallets that never open the app. Requires `CRON_SECRET`
+  set in both `.env.local` and the Vercel project's env vars — Vercel sends it automatically as
+  `Authorization: Bearer $CRON_SECRET` for its own scheduled invocations once the env var exists,
+  nothing else to wire up on that side. **`vercel.json` must live at `apps/web/vercel.json`**,
+  the Vercel project's configured Root Directory — not the monorepo root. Vercel only ever reads
+  `vercel.json` from Root Directory, so one sitting at the repo root (easy to create by accident
+  in a monorepo) is silently never read and its `crons` entry never registers, even though the
+  route's own `CRON_SECRET` check is entirely correct. Confirmed live as the actual root cause of
+  the daily settlement cron never firing — check *where* the file lives before debugging the
+  cron route itself.
+- `habits.deadline_time` is UI-only (see the off-chain metadata note above) — there is no
+  timezone-aware on-chain deadline enforcement, only the real UTC-midnight settlement. Don't
+  assume "Missed" shown in the UI means a penalty has actually moved funds.
 
 ## Gotchas
 
+- **The 3-habit cap gates *active* habits, not lifetime `habitCount`.** This changed after a
+  redeploy (see git history / current `.env.local` addresses) specifically because the earlier
+  lifetime-based rule caused a real reported bug (users blocked from adding a habit after
+  deactivating one, and the AI chat coach refusing all new-habit requests with stale "3 is a
+  lifetime cap" wording — see the AI section above). `HabitManager.createHabit()` now reverts
+  only when `_activeCount(user) >= MAX_HABITS`; `habitCountOf` still only ever grows (no slot
+  reuse — a deactivated index is never reused), so `habitCount` alone is *not* a valid "can they
+  add another?" check. There's also no external `activeCount` view — `_activeCount` is internal.
+  The frontend re-derives it itself by scanning `habitActive(user, i)` for every index up to
+  `habitCount` (`hooks/useUnmirroredHabits.ts`'s `scanHabits`, exposed as `activeCount`) rather
+  than trusting Supabase's `active` column, since on-chain stays the source of truth and mirror
+  drift is exactly what that hook exists to catch. If you add a new place that needs to know "can
+  this wallet create another habit," reuse `useUnmirroredHabits()`'s `activeCount` — don't
+  reintroduce a raw `habitCount()` read for this purpose.
+- **A Supabase column referenced in a route's `select`/`insert` before its migration is applied
+  fails the whole query silently** (PostgREST returns a generic error, not "column doesn't
+  exist" in an obvious spot) — this has caused real, confusing cascading bugs live: adding
+  `deadline_time` to `/api/habits`'s `select` before migration `0004` was applied broke that
+  route entirely, which broke `/api/habits/history` too, which made
+  `useUnmirroredHabits`/`RecoverHabitsModal` treat *every* habit as permanently unmirrored (an
+  infinite-feeling "can't move from here" loop) even though the actual root cause was three
+  layers away. When a route starts failing right after adding a new column reference, check
+  whether its migration has actually been run in Supabase before debugging application logic.
+  There's no automated migration runner here — migrations under `packages/supabase/migrations/`
+  must be applied by hand (the SQL editor in the Supabase dashboard); writing `add column if not
+  exists` / `create index if not exists` makes a migration script safe to re-run if you're not
+  sure exactly which of several have already landed.
 - **Every wagmi read/write needs an explicit `chainId`.** Without it, wagmi silently uses
   whatever network the wallet extension currently has active instead of Monad — confirmed live
   as a `createHabit` call that showed up in the wallet as an ETH-denominated tx. Always pass
@@ -204,7 +688,14 @@ CSS variables (`--background`, `--foreground`, `--muted`, `--border`, `--surface
 - ESLint's `react-hooks/set-state-in-effect` rule fires on the common
   "call an async data-loader function directly inside `useEffect`" pattern — inline the fetch
   with a `cancelled` flag instead (see `app/page.tsx`'s state-loading effect for the pattern
-  used here).
+  used here). The same rule also fires if a `useCallback`-wrapped loader (one that itself calls
+  `setState`) is invoked from an effect body, even indirectly — the fix used throughout this repo
+  (`hooks/useUnmirroredHabits.ts`, `components/HabitList.tsx`'s `load`) is to duplicate a small
+  plain async function outside the hook chain and call it via `.then()` in the mount effect,
+  keeping a separate `useCallback` version only for imperative re-triggering (e.g. after a save).
+  For a modal that must stay mounted-but-reset between opens rather than reset-in-effect, prefer
+  a `key`-remount over manual state clearing (see `EditHabitModal`'s
+  `key={editing?.contractIndex ?? "none"}` usage in `HabitList.tsx`).
 - `apps/web/lib/abi/*.json` are generated artifacts (`npm run sync-abi` from repo root, wraps
   `forge inspect <Contract> abi --json`) — never hand-edit them.
 - `contracts/lib/` (forge-std, openzeppelin-contracts) is gitignored; run
