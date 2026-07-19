@@ -17,9 +17,24 @@ const rakkas = Rakkas({
   weight: "400",
 });
 
+// metadataBase resolves the opengraph-image.png/twitter-image.png convention files (below) to
+// absolute URLs — required for link-unfurling bots (Slack/Discord/iMessage/Twitter), which won't
+// follow a relative image path. Production Vercel domain, same one CRON_SECRET's GitHub Actions
+// workflow calls (see .github/workflows/settle-cron.yml).
 export const metadata: Metadata = {
+  metadataBase: new URL("https://argus-web-omega.vercel.app"),
   title: "Argus",
   description: "Your AI-powered accountability wallet on Monad.",
+  openGraph: {
+    title: "Argus",
+    description: "Your AI-powered accountability wallet on Monad.",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Argus",
+    description: "Your AI-powered accountability wallet on Monad.",
+  },
 };
 
 // Explicit rather than relying on Next's implicit default — this app has zero mobile handling

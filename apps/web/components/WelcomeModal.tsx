@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { CheckCircle, Eye, ShieldCheck, Wallet } from "@phosphor-icons/react";
 import { Modal } from "./Modal";
 
@@ -51,6 +52,16 @@ export function WelcomeModal({ open, onClose }: { open: boolean; onClose: () => 
   return (
     <Modal open={open} title="Welcome to Argus" onClose={onClose}>
       <div className="space-y-5">
+        {/* Cover banner, right beneath Modal's own title bar and above the step-by-step content
+            below — intrinsic 472×158 (public/welcome-cover.png), rendered full-width with height
+            auto so next/image can still derive the correct aspect ratio at any modal width. */}
+        <Image
+          src="/welcome-cover.png"
+          alt="Welcome to Argus — your commitments now have a guardian."
+          width={472}
+          height={158}
+          className="w-full h-auto rounded-xl"
+        />
         <p className="text-sm text-muted">How accountability works.</p>
         <div className="space-y-4">
           {STEPS.map(({ icon: Icon, title, body }) => (

@@ -5,10 +5,10 @@
    approximated. Single (dark) theme, no light-mode variant — the spec doesn't define one. */
 
 :root {
-  --background: #090806; /* page — darker, warmer near-black per a direct brand-color update
-    (was #141514) */
-  --card: #0e0d0b; /* the big rounded content card (habits/welcome/insight), and modal/sheet
-    panels — direct brand-color update, was #111211 */
+  --background: #090906; /* page, including the landing page — direct brand-color update, was
+    #090806 (before that #141514) */
+  --card: #0e0e0b; /* the content container holding the dashboard summary/habits and modal/sheet
+    panels — direct brand-color update, was #0e0d0b (before that #111211) */
   --foreground: #ffffff;
   --muted: rgba(255, 255, 255, 0.6); /* general secondary text default — components needing a
     precise spec tier (0.7 / 0.45 / 0.38 / 0.13) use an explicit text-white/NN utility instead */

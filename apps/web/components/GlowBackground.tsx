@@ -1,12 +1,13 @@
 /// Soft ambient glow, per Downloads/Background Glow.md's brief — reuses the exact palette from
 /// the "Chat with Argus" hover glow (app/page.tsx's conic-gradient) rather than the brief's own
 /// named colors, per direct instruction, so the two glow moments in the app read as the same
-/// family of color. Both are painted as a monochromatic gold family anchored on the app's own
-/// brand gold (`#fde9be` pale gold tint → `#f5b94c` the exact brand gold, kept as an anchor →
-/// `#e0a233` medium gold → `#c08a2e` deeper amber → `#7a5518` dark shade) per a direct
-/// brand-color instruction — a prior pass had briefly repainted this as a green/mint family,
-/// since reverted back to gold to match the rest of the brand-color update. Rises from
-/// bottom-center, blurred and low-opacity, masked to fade upward —
+/// family of color. Both are painted as a monochromatic yellow family anchored on the app's own
+/// brand yellow (`#ffff9d` pale yellow tint, kept as the lightest stop/anchor → `#ffff2c` bright
+/// yellow → `#f5f50b` medium yellow → `#cdcd11` deeper yellow → `#7a7a0e` dark shade), same
+/// 5-stop tonal-depth technique as the prior gold family it replaces, per a direct
+/// brand-color update (`#ffff9d` given directly; the other four derived to preserve the same
+/// relative lightness/saturation steps the gold family used). Rises from bottom-center, blurred
+/// and low-opacity, masked to fade upward —
 /// no explicit fade-to-black color is painted; this sits on top of the real `bg-card` background
 /// and simply fades its own opacity to 0, which reveals that background cleanly rather than
 /// risking a visible seam against a hand-picked "near black" that might not exactly match
@@ -31,11 +32,11 @@ export function GlowBackground({ intensity = 1 }: { intensity?: number }) {
           // linear-gradient mask this had was a second, redundant fade mechanism and one more
           // thing that could silently fail; removed rather than debugged blind a third time.
           background: [
-            "radial-gradient(60% 70% at 30% 100%, #fde9be 0%, transparent 60%)",
-            "radial-gradient(55% 65% at 55% 100%, #f5b94c 0%, transparent 60%)",
-            "radial-gradient(60% 70% at 75% 100%, #e0a233 0%, transparent 60%)",
-            "radial-gradient(65% 75% at 45% 100%, #c08a2e 0%, transparent 65%)",
-            "radial-gradient(70% 80% at 60% 100%, #7a5518 0%, transparent 65%)",
+            "radial-gradient(60% 70% at 30% 100%, #ffff9d 0%, transparent 60%)",
+            "radial-gradient(55% 65% at 55% 100%, #ffff2c 0%, transparent 60%)",
+            "radial-gradient(60% 70% at 75% 100%, #f5f50b 0%, transparent 60%)",
+            "radial-gradient(65% 75% at 45% 100%, #cdcd11 0%, transparent 65%)",
+            "radial-gradient(70% 80% at 60% 100%, #7a7a0e 0%, transparent 65%)",
           ].join(", "),
         }}
       />

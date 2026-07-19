@@ -505,10 +505,11 @@ host two purely decorative background layers, `components/GlowBackground.tsx` an
 `components/DotGrid.tsx`, both `absolute inset-0` and mounted first so every real child needs
 `relative z-10` to stack above them: `GlowBackground` is a static, blurred radial glow rising
 from bottom-center (reuses the exact palette from the "Chat with Argus" hover glow below, on
-purpose, so the two glow moments feel related — a monochromatic gold family anchored on the
-brand gold, `#fde9be` → `#f5b94c` → `#e0a233` → `#c08a2e` → `#7a5518`, repainted from an original
-5-color rainbow per a direct brand-color decision (a brief intermediate green/mint version was
-reverted back to gold); see the brand-texture note under Design constraints below for the full
+purpose, so the two glow moments feel related — a monochromatic yellow family anchored on
+`#ffff9d` (given directly) → `#ffff2c` → `#f5f50b` → `#cdcd11` → `#7a7a0e` (derived to preserve
+the same relative lightness/saturation steps), repainted from an original 5-color rainbow per a
+direct brand-color decision (intermediate green/mint, then gold, versions were each superseded by
+later brand-color updates); see the brand-texture note under Design constraints below for the full
 story and everywhere else this pairing now also appears) that fades to transparent rather
 than painting an explicit "near black," so it never risks a seam against `--card`'s real value.
 `DotGrid` is an animated dot pattern — not per-dot DOM/JS (would need thousands of nodes or a
@@ -652,9 +653,10 @@ read (balances, streak) could lag up to 4s behind a transaction that had already
 ### Design constraints (Figma spec, current phase)
 
 Dark-only theme, no light mode. Exact tokens in `apps/web/app/globals.css`: background
-`#090806` (a direct brand-color update — was `#141514`), card `#111211` (left as-is; the update
-only specified background, so the page is now technically a touch darker than the card, a subtle
-flip from before but not something to "fix" without being asked), foreground `#ffffff`
+`#090906` (the page, including the landing page — direct brand-color update, was `#090806`,
+before that `#141514`), card `#0e0e0b` (the content container holding the dashboard
+summary/habits, plus modal/sheet panels — direct brand-color update, was `#0e0d0b`, before that
+`#111211`), foreground `#ffffff`
 (`--foreground` — every "primary button" in the app is a plain white fill, `bg-foreground`, with
 dark text, `text-background`; a brief pass introduced a separate gold `--primary` token and moved
 all ~30 of those call sites onto it, since reverted back to `bg-foreground` — the user's actual
@@ -690,20 +692,22 @@ every authenticated screen) uses the icon-only logomark, no accompanying text �
 left alone — it's a thematic "watching/verifying" glyph for that one step, not a brand-logo
 placement.
 
-**Brand texture (gold glow, grain, dots) — infused subtly across more surfaces, per a direct
+**Brand texture (yellow glow, grain, dots) — infused subtly across more surfaces, per a direct
 branding decision.** Two separate changes, done together:
 1. **Color**: `GlowBackground.tsx`'s 5-stop radial-gradient glow and the "Chat with Argus"
    button's conic-gradient hover glow (`app/page.tsx`) both moved from an original 5-color
-   rainbow (pink/gold/mint/blue/purple) to a monochromatic gold family anchored on the brand
-   gold — `#fde9be` (pale gold tint) → `#f5b94c` (the exact brand gold, kept as an anchor) →
-   `#e0a233` (medium gold) → `#c08a2e` (deeper amber) → `#7a5518` (dark shade) — same
-   positions/shapes each stop already had, only the colors changed. (A brief intermediate pass
-   repainted this as a green/mint family instead — `#a8ffd1` → `#6bffb8` → `#3ddc97` → `#1fae66`
-   → `#0d7a4a` — since reverted back to gold per the user's actual request, which was
-   specifically "background to `#090806`, and anywhere there's green mint → `#F5B94C` and its
-   tints/shades.") The two glow moments are kept in sync deliberately (documented since
-   `GlowBackground.tsx` was first written — "the two glow moments read as the same family of
-   color").
+   rainbow (pink/gold/mint/blue/purple) to a monochromatic yellow family anchored on
+   `#ffff9d` (pale yellow tint, given directly, kept as the lightest stop) → `#ffff2c` (bright
+   yellow) → `#f5f50b` (medium yellow) → `#cdcd11` (deeper yellow) → `#7a7a0e` (dark shade, the
+   other four derived to preserve the same relative lightness/saturation steps the prior family
+   used) — same positions/shapes each stop already had, only the colors changed. This family has
+   been repainted twice before: green/mint (`#a8ffd1` → `#6bffb8` → `#3ddc97` → `#1fae66` →
+   `#0d7a4a`), then gold (`#fde9be` → `#f5b94c` → `#e0a233` → `#c08a2e` → `#7a5518`, anchored on
+   `#F5B94C` per that update's "background to `#090806`, and anywhere there's green mint →
+   `#F5B94C` and its tints/shades" instruction) — each superseded by the next direct brand-color
+   update; this yellow family is the current one. The two glow moments are kept in sync
+   deliberately (documented since `GlowBackground.tsx` was first written — "the two glow moments
+   read as the same family of color").
 2. **Texture reach**: `components/GrainOverlay.tsx` (new) extracted the fractal-noise SVG data
    URI that used to live only inline inside `DotGrid.tsx` into a shared constant, and mounts one
    always-on, viewport-pinned copy once in `app/layout.tsx` (`fixed inset-0 -z-10

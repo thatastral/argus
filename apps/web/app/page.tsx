@@ -310,14 +310,14 @@ export default function Home() {
               {/* Blurred, rotating conic-gradient glow — clipped to the button's own rounded-full
                   shape via the button's own `overflow-hidden`, so it reads as an internal shimmer
                   confined to the pill rather than a halo bleeding onto the page around it. Same
-                  gold family as GlowBackground.tsx (kept in sync deliberately, see its doc
+                  yellow family as GlowBackground.tsx (kept in sync deliberately, see its doc
                   comment) — first color repeated at the end for a seamless rotation loop. */}
               <span
                 aria-hidden
                 className="pointer-events-none absolute -inset-4 opacity-0 blur-lg transition-opacity duration-300 ease-emil-out [@media(hover:hover)]:group-hover:animate-glow-spin [@media(hover:hover)]:group-hover:opacity-60"
                 style={{
                   background:
-                    "conic-gradient(from 0deg, #fde9be, #f5b94c, #e0a233, #c08a2e, #7a5518, #fde9be)",
+                    "conic-gradient(from 0deg, #ffff9d, #ffff2c, #f5f50b, #cdcd11, #7a7a0e, #ffff9d)",
                 }}
               />
               <span className="relative z-10">Chat with Argus</span>
