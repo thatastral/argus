@@ -178,19 +178,28 @@ export default function Home() {
   const verifiedToday = new Set(
     state.todaysCompletions.filter((c) => c.verified).map((c) => c.contract_index),
   );
-  const remainingToday = activeHabits.filter((h) => !verifiedToday.has(h.contract_index)).length;
-  const allDoneToday = remainingToday === 0 && activeHabitCount > 0;
+  // Per-habit resolution, same three states HabitDayGroups.tsx's HabitRow already renders
+  // individually (verified / missed / still-pending) — used to matter only in aggregate here
+  // (`remainingToday` folded missed and pending together), which is what made "N habits to
+  // complete today" count habits that could no longer actually be completed once their deadline
+  // had passed, and made the "you missed" copy only ever fire once *every* habit was resolved
+  // rather than as soon as any single one was missed.
+  const verifiedTodayCount = activeHabits.filter((h) => verifiedToday.has(h.contract_index)).length;
+  const missedToday = activeHabits.filter((h) => {
+    if (verifiedToday.has(h.contract_index)) return false;
+    const deadlineTime = h.deadline_time ? h.deadline_time.slice(0, 5) : null;
+    return deadlineTime !== null && computeCountdown(deadlineTime).passed;
+  }).length;
+  // Still genuinely completable today — excludes both verified and already-missed habits, unlike
+  // the old remainingToday which counted every unverified habit as "left to complete."
+  const remainingToday = activeHabitCount - missedToday - verifiedTodayCount;
+  const allDoneToday = remainingToday === 0 && missedToday === 0 && activeHabitCount > 0;
   // Mirrors HabitDayGroups.tsx's day-level resolution: once every active habit is either
   // verified or its own deadline has passed, today is "resolved" (one way or the other) — a
   // habit with no deadline set can only ever resolve via verified, so it keeps today unresolved
   // regardless of the others until real midnight.
-  const allResolvedToday =
-    activeHabitCount > 0 &&
-    activeHabits.every((h) => {
-      const deadlineTime = h.deadline_time ? h.deadline_time.slice(0, 5) : null;
-      return verifiedToday.has(h.contract_index) || (deadlineTime !== null && computeCountdown(deadlineTime).passed);
-    });
-  const anyMissedToday = allResolvedToday && !allDoneToday;
+  const allResolvedToday = activeHabitCount > 0 && remainingToday === 0;
+  const anyMissedToday = missedToday > 0;
   const closeOverlay = () => setOverlay(null);
 
   const insightMessage = computeInsight(state.recentCompletionTimestamps);
@@ -231,11 +240,19 @@ export default function Home() {
                 <>
                   You&apos;ve completed all <span className="text-white">{activeHabitCount} habits</span> for today
                 </>
+              ) : anyMissedToday && remainingToday > 0 ? (
+                <>
+                  You missed{" "}
+                  <span className="text-white">
+                    {missedToday} {missedToday === 1 ? "habit" : "habits"}
+                  </span>{" "}
+                  — {remainingToday} {remainingToday === 1 ? "habit" : "habits"} left to complete today
+                </>
               ) : anyMissedToday ? (
                 <>
                   You missed{" "}
                   <span className="text-white">
-                    {remainingToday} {remainingToday === 1 ? "habit" : "habits"}
+                    {missedToday} {missedToday === 1 ? "habit" : "habits"}
                   </span>{" "}
                   today
                 </>
@@ -266,6 +283,12 @@ export default function Home() {
                 <ListChecks size={14} weight="bold" className="text-muted" />
                 {remainingToday} left
               </span>
+              {anyMissedToday && (
+                <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium text-warning">
+                  <Clock size={14} weight="bold" />
+                  {missedToday} missed
+                </span>
+              )}
               <span className="flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-xs font-medium">
                 <LockSimple size={14} weight="bold" className="text-warning" />
                 {committedLoading ? "…" : `${Number(committedFormatted).toFixed(2)} ${committedSymbol} committed`}

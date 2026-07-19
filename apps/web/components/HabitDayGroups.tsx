@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatUnits } from "viem";
 import { CaretRight, ListChecks, PencilSimple } from "@phosphor-icons/react";
 import { useCountdownToDeadline, computeCountdown } from "@/hooks/useCountdownToDeadline";
+import { PENALTY_TYPE_LABEL, type PenaltyType } from "@/lib/penalty";
 import { LiveCameraCapture } from "./LiveCameraCapture";
 
 export interface DayHabit {
@@ -68,11 +69,13 @@ function PastStatusPill({ allCompleted }: { allCompleted: boolean }) {
 function HabitRow({
   habit,
   isToday,
+  penaltyType,
   onVerified,
   onEdit,
 }: {
   habit: DayHabit;
   isToday: boolean;
+  penaltyType: PenaltyType | null;
   onVerified: () => void;
   onEdit?: () => void;
 }) {
@@ -107,10 +110,16 @@ function HabitRow({
   if (habit.deadlineTime !== null && !showLiveCountdown) {
     metaParts.push(`Due ${formatTime12h(habit.deadlineTime)}`);
   }
+  // Surfaces where a missed stake is actually headed as soon as it's missed, rather than only
+  // ever showing that at the real UTC-midnight settlement (per a direct instruction: the fund
+  // move itself can stay next-day, but the UI shouldn't wait until then to say where it's going).
+  if (showMissed && penaltyType) {
+    metaParts.push(`→ ${PENALTY_TYPE_LABEL[penaltyType]}`);
+  }
   const metaLine = metaParts.join(" · ");
 
   return (
-    <div className={`group flex items-center justify-between gap-4 py-1 ${habit.verified ? "opacity-50" : ""}`}>
+    <div className={`group flex items-center justify-between gap-4 py-1 ${habit.verified || showMissed ? "opacity-50" : ""}`}>
       <div className="min-w-0 flex-1 pr-2">
         <p className="truncate text-base font-medium" title={habit.name}>
           {habit.name}
@@ -184,10 +193,16 @@ function HabitRow({
 /// except today's starts collapsed; today is always expanded and un-toggleable.
 export function DayGroupsList({
   days,
+  penaltyType,
   onVerified,
   onEdit,
 }: {
   days: DayGroup[];
+  // Loosely typed to match HistoryResponse.penaltyType (itself a passthrough of Supabase's
+  // penalty_configs.penalty_type) — narrowed to the real PenaltyType union right where it's
+  // used, same trust level PENALTY_TYPE_LABEL lookups already extend elsewhere (SettingsSheet.tsx,
+  // ChatSidebar.tsx), since this column is only ever written by /api/penalty's own zod-validated body.
+  penaltyType?: string | null;
   onVerified: () => void;
   onEdit?: (contractIndex: number, name: string) => void;
 }) {
@@ -260,6 +275,7 @@ export function DayGroupsList({
                     key={habit.contractIndex}
                     habit={habit}
                     isToday={group.isToday}
+                    penaltyType={(penaltyType as PenaltyType | undefined) ?? null}
                     onVerified={onVerified}
                     onEdit={
                       group.isToday && onEdit ? () => onEdit(habit.contractIndex, habit.name) : undefined

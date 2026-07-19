@@ -34,7 +34,7 @@ function HistoryContent({ onVerified }: { onVerified: () => void }) {
     );
   }
 
-  return <DayGroupsList days={data.days} onVerified={onVerified} />;
+  return <DayGroupsList days={data.days} penaltyType={data.penaltyType} onVerified={onVerified} />;
 }
 
 export function HistoryModal({

@@ -81,6 +81,7 @@ export function HabitList({ onChange, refreshToken }: { onChange?: () => void; r
       {!data ? null : (
         <DayGroupsList
           days={data.days}
+          penaltyType={data.penaltyType}
           onVerified={() => {
             load();
             onChange?.();

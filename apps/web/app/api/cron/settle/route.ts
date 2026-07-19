@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase/server";
-import { settlePendingDays } from "@/lib/chain";
+import { settlePendingDays, contractAddresses } from "@/lib/chain";
 
 // Sequential across users, so a large-ish backlog stays within one invocation. Fine at
 // hackathon/MVP scale (a handful of test wallets); if the user base grows enough that this
@@ -26,7 +26,16 @@ export async function GET(request: Request) {
   }
 
   const supabase = supabaseAdmin();
-  const { data: rows, error } = await supabase.from("habits").select("wallet_address").eq("active", true);
+  // Scoped to the currently-configured contract (migration 0008) — otherwise a redeploy (routine
+  // on this project) leaves this sweep still targeting wallets whose habits only exist on a now-
+  // defunct HabitManager, where settle() always reverts with NoHabitsYet on the very first try;
+  // harmless (swallowed by settlePendingDays' catch) but wastes every cron tick chasing wallets
+  // that can never have anything to settle on the current contract.
+  const { data: rows, error } = await supabase
+    .from("habits")
+    .select("wallet_address")
+    .eq("active", true)
+    .eq("habit_manager_address", contractAddresses.habitManager ?? "");
   if (error) {
     return NextResponse.json({ error: "Failed to load wallets" }, { status: 500 });
   }
