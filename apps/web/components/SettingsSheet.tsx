@@ -14,6 +14,7 @@ import { Spinner } from "./Spinner";
 import { Tooltip } from "./Tooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { WalletReconnect } from "./WalletReconnect";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 interface CurrentPenalty {
   penalty_type: PenaltyType;
@@ -96,7 +97,7 @@ export function SettingsSheet({
       if (!res.ok) throw new Error("Could not save display name");
       return true;
     } catch (err) {
-      setNameError(err instanceof Error ? err.message : "Could not save display name");
+      setNameError(friendlyErrorMessage(err, "Could not save display name"));
       return false;
     } finally {
       setSavingName(false);

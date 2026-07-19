@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useDisconnect } from "wagmi";
+import { useAccount, useDisconnect } from "wagmi";
 import { formatUnits } from "viem";
 import { ListChecks, LockSimple, Clock } from "@phosphor-icons/react";
-import { ConnectButton } from "@/components/ConnectButton";
+import { LandingScreen } from "@/components/LandingScreen";
 import { SetupFlow } from "@/components/SetupFlow";
 import { HabitList } from "@/components/HabitList";
 import { WalletStatus } from "@/components/WalletStatus";
@@ -13,7 +13,7 @@ import { ChatSidebar } from "@/components/ChatSidebar";
 import { Modal } from "@/components/Modal";
 import { SettingsSheet } from "@/components/SettingsSheet";
 import { StreakPanel } from "@/components/StreakPanel";
-import { WelcomeModal } from "@/components/WelcomeModal";
+import { WelcomeModal, hasSeenWelcome, markWelcomeSeen } from "@/components/WelcomeModal";
 import { InsightCard } from "@/components/InsightCard";
 import { GlowBackground } from "@/components/GlowBackground";
 import { DotGrid } from "@/components/DotGrid";
@@ -55,6 +55,11 @@ export default function Home() {
   const [stateLoaded, setStateLoaded] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [overlay, setOverlay] = useState<"wallet" | "streak" | "settings" | null>(null);
+  // WelcomeModal is now a controlled component (see its doc comment) — this is the post-signin
+  // auto-open path, gated on the same one-time localStorage flag it always used; LandingScreen's
+  // "How it works" link drives its own independent instance of the same component.
+  const [welcomeOpen, setWelcomeOpen] = useState(() => !hasSeenWelcome());
+  const { address: connectedAddress, isConnected } = useAccount();
   const { disconnect } = useDisconnect();
   const { currentStreak, refetchAll: refetchStreak } = useStreak();
   // Called unconditionally here (before the early-return guards below) so the stat row's "time
@@ -98,6 +103,27 @@ export default function Home() {
     };
   }, [sessionWallet]);
 
+  // The session cookie only ever changes on an explicit sign-in/sign-out through ConnectButton —
+  // nothing previously reacted to the wallet extension's own account switcher, so switching
+  // accounts there (without disconnecting in-app first) left the dashboard silently showing the
+  // *previous* wallet's habits/data forever, since `sessionWallet` never updated to match.
+  // Confirmed-plausible live cause of "when a new wallet is connected, old habits [from the
+  // stale session] keep showing." This only drops our own session tracking — it deliberately
+  // never calls wagmi's disconnect(), since the user's wallet is still connected, just to a
+  // different address; dropping sessionWallet lands them on LandingScreen, whose ConnectButton
+  // already shows `isConnected` true and jumps straight to the sign-in step for the new address.
+  useEffect(() => {
+    if (!sessionWallet || !isConnected || !connectedAddress) return;
+    if (connectedAddress.toLowerCase() === sessionWallet.toLowerCase()) return;
+    fetch("/api/auth/logout", { method: "POST" }).finally(() => {
+      setState(null);
+      setStateLoaded(false);
+      setChatOpen(false);
+      setOverlay(null);
+      setSessionWallet(null);
+    });
+  }, [connectedAddress, isConnected, sessionWallet]);
+
   // Full sign-out: clears the session cookie and disconnects the wallet connector so a
   // different address can connect + go through SetupFlow as a genuinely new user, rather than
   // just closing the tab (which leaves both the cookie and the wallet connection live).
@@ -105,6 +131,7 @@ export default function Home() {
     disconnect();
     await fetch("/api/auth/logout", { method: "POST" });
     setState(null);
+    setStateLoaded(false);
     setChatOpen(false);
     setOverlay(null);
     setSessionWallet(null);
@@ -115,15 +142,7 @@ export default function Home() {
   }
 
   if (!sessionWallet) {
-    return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-6 px-4">
-        <div className="text-center">
-          <h1 className="text-2xl font-semibold">Argus</h1>
-          <p className="mt-1 text-sm text-muted">Your AI-powered accountability wallet on Monad.</p>
-        </div>
-        <ConnectButton onSignedIn={setSessionWallet} />
-      </main>
-    );
+    return <LandingScreen onSignedIn={setSessionWallet} />;
   }
 
   if (!stateLoaded) {
@@ -140,7 +159,7 @@ export default function Home() {
         <DotGrid intensity={0.75} />
         <h1 className="relative z-10 text-xl font-semibold">Let&apos;s set up Argus</h1>
         <div className="relative z-10 w-full">
-          <SetupFlow onComplete={loadState} />
+          <SetupFlow onComplete={loadState} onBackToLanding={signOut} />
         </div>
       </main>
     );
@@ -193,7 +212,11 @@ export default function Home() {
       <main className="flex flex-1 px-4 pb-4 sm:px-8 sm:pb-8">
         <div className="relative flex w-full flex-1 flex-col overflow-hidden rounded-3xl bg-card p-8 sm:p-12">
           <GlowBackground />
-          <DotGrid />
+          {/* Intensity pulled down hard per a direct instruction ("reduce the dots opacity
+              greatly") — this card is the most content-dense, text-heavy surface in the app, so
+              the dot grid needs to stay well in the background rather than competing with the
+              habit list. */}
+          <DotGrid intensity={0.2} />
 
           {/* Centered as its own column — reserving the chat panel's width as page padding above
               (only at sm:+, since the panel is full-width below that — see ChatSidebar.tsx) is
@@ -268,13 +291,15 @@ export default function Home() {
             >
               {/* Blurred, rotating conic-gradient glow — clipped to the button's own rounded-full
                   shape via the button's own `overflow-hidden`, so it reads as an internal shimmer
-                  confined to the pill rather than a halo bleeding onto the page around it. */}
+                  confined to the pill rather than a halo bleeding onto the page around it. Same
+                  gold family as GlowBackground.tsx (kept in sync deliberately, see its doc
+                  comment) — first color repeated at the end for a seamless rotation loop. */}
               <span
                 aria-hidden
                 className="pointer-events-none absolute -inset-4 opacity-0 blur-lg transition-opacity duration-300 ease-emil-out [@media(hover:hover)]:group-hover:animate-glow-spin [@media(hover:hover)]:group-hover:opacity-60"
                 style={{
                   background:
-                    "conic-gradient(from 0deg, #ff6b9d, #ffd56b, #6bffb8, #6ba8ff, #b06bff, #ff6b9d)",
+                    "conic-gradient(from 0deg, #fde9be, #f5b94c, #e0a233, #c08a2e, #7a5518, #fde9be)",
                 }}
               />
               <span className="relative z-10">Chat with Argus</span>
@@ -289,7 +314,13 @@ export default function Home() {
 
       <ChatSidebar open={chatOpen} onClose={() => setChatOpen(false)} />
 
-      <WelcomeModal />
+      <WelcomeModal
+        open={welcomeOpen}
+        onClose={() => {
+          markWelcomeSeen();
+          setWelcomeOpen(false);
+        }}
+      />
 
       <Modal open={overlay === "settings"} title="Settings" onClose={closeOverlay}>
         <SettingsSheet

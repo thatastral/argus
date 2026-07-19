@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { DM_Sans, Rakkas } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { GrainOverlay } from "@/components/GrainOverlay";
 
 const dmSans = DM_Sans({
   variable: "--font-dm-sans",
@@ -39,6 +40,9 @@ export default function RootLayout({
       className={`${dmSans.variable} ${rakkas.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* Mounted once, globally — see GrainOverlay.tsx for why every screen gets this, even
+            ones that never mount GlowBackground/DotGrid at all. */}
+        <GrainOverlay />
         <Providers>{children}</Providers>
       </body>
     </html>

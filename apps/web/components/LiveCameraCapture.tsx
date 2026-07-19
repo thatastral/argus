@@ -6,6 +6,7 @@ import { CATEGORY_PROOF_HINT, inferHabitCategory } from "@/lib/habitCategory";
 import { Modal } from "./Modal";
 import { Spinner } from "./Spinner";
 import { useToast } from "./Toast";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 const PRESS_FEEDBACK = "transition-transform duration-150 ease-emil-out active:scale-[0.97]";
 
@@ -278,7 +279,7 @@ export function LiveCameraCapture({ onClose, contractIndex, habitName, onVerifie
         toast(`"${habitName}" proof was rejected`, "error");
       }
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Upload failed");
+      setSubmitError(friendlyErrorMessage(err, "Upload failed"));
     } finally {
       setSubmitting(false);
     }

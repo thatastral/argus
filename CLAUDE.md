@@ -372,6 +372,36 @@ and `via_gallery_fallback`; `0005_drop_wallet_mode_add_proof_type.sql` adds
 `habit_completions.proof_type` (`'camera' | 'appSummary'`) — like every migration here, both
 must be applied manually (see the migrations gotcha below).
 
+### Landing screen: one-fold, brand-textured, "How it works" reuses the onboarding walkthrough
+
+`components/LandingScreen.tsx` is what `app/page.tsx` renders for the signed-out state (no
+session wallet yet) — a top bar (wordmark left, a "How it works" link right, the real brand
+asset `public/argus-wordmark.png` — see the logo/brand-asset note under Design constraints
+below), a centered hero (eyebrow pill, a Rakkas-styled (`font-display`) headline, subcopy, the
+existing `ConnectButton`, a small trust line), and a small footer, all inside `h-dvh flex
+flex-col overflow-hidden` (dynamic viewport height, not `100vh`, to avoid the mobile
+browser-chrome resize jump) so the whole thing fits one screen with no scrolling at any width.
+`ConnectButton.tsx`'s trigger button is styled larger here than its default size (bigger
+padding/text, since it's the hero's one CTA) — safe to restyle in place rather than adding a
+size-variant prop, since it's only ever rendered from this one call site.
+
+Originally shipped with **no** decorative background at all (deliberately, to keep this screen
+simple) — now carries `GlowBackground`/`DotGrid` at intensity `0.5` (lower than the dashboard's
+`1` baseline) once the brand-texture pass (see Design constraints below) decided every screen,
+including this one, should read as part of the same textured app rather than being the one plain
+exception. Still deliberately has **no** decorative *product-preview* panel (a mock of the real
+dashboard, the kind many SaaS landing pages show) — that's a different, heavier addition (fake
+stat pills, a second bounded card) that a gate for an already-built product doesn't need, distinct
+from the app-wide ambient glow/dots/grain treatment every surface now carries.
+
+The "How it works" link opens `components/WelcomeModal.tsx` — the same four-step walkthrough
+previously only ever auto-shown once post-signin. `WelcomeModal` is now a controlled component
+(`open`/`onClose` props, not a self-managed `useState`) specifically so both callers can drive
+the identical content without duplicating it: `app/page.tsx` owns a `welcomeOpen` state gated on
+`hasSeenWelcome()`/`markWelcomeSeen()` (both now exported from `WelcomeModal.tsx`) for the
+one-time post-signin auto-open, while `LandingScreen.tsx` owns its own independent `useState` for
+the link — an explicit click, re-openable anytime, no localStorage bookkeeping on that path.
+
 ### Home screen: habit-focused, chat as a fixed side panel
 
 `app/page.tsx`'s signed-in view is habit-first, not a balance hero: `components/AppHeader.tsx`
@@ -379,10 +409,14 @@ must be applied manually (see the migrations gotcha below).
 main `bg-card rounded-3xl` container, which is `relative overflow-hidden` specifically so it can
 host two purely decorative background layers, `components/GlowBackground.tsx` and
 `components/DotGrid.tsx`, both `absolute inset-0` and mounted first so every real child needs
-`relative z-10` to stack above them: `GlowBackground` is a static, blurred multi-color radial
-glow rising from bottom-center (reuses the exact palette from the "Chat with Argus" hover glow
-below, on purpose, so the two glow moments feel related) that fades to transparent rather than
-painting an explicit "near black," so it never risks a seam against `--card`'s real value.
+`relative z-10` to stack above them: `GlowBackground` is a static, blurred radial glow rising
+from bottom-center (reuses the exact palette from the "Chat with Argus" hover glow below, on
+purpose, so the two glow moments feel related — a monochromatic gold family anchored on the
+brand gold, `#fde9be` → `#f5b94c` → `#e0a233` → `#c08a2e` → `#7a5518`, repainted from an original
+5-color rainbow per a direct brand-color decision (a brief intermediate green/mint version was
+reverted back to gold); see the brand-texture note under Design constraints below for the full
+story and everywhere else this pairing now also appears) that fades to transparent rather
+than painting an explicit "near black," so it never risks a seam against `--card`'s real value.
 `DotGrid` is an animated dot pattern — not per-dot DOM/JS (would need thousands of nodes or a
 canvas loop for true per-dot randomness), instead three stacked copies of the same CSS
 repeating-dot background, each opacity-animated at a different duration (`--animate-dot-twinkle-
@@ -442,7 +476,8 @@ together on desktop so nothing (including the header's pills) ever sits undernea
 panel. This is the standard AI-chat-sidebar pattern (Notion AI, Cursor, Intercom) — pinned to the
 viewport, unaffected by page scroll. Kept always-mounted so the conversation survives collapsing
 the panel. Message rendering follows the current ChatGPT/Claude.ai convention: user turns get a
-`rounded-3xl` bubble (`bg-foreground`, right-aligned via `flex justify-end`, not the old
+`rounded-3xl` bubble (`bg-foreground` — briefly moved to a `bg-primary` gold token during a since-
+reverted brand-color pass, see Design constraints below — right-aligned via `flex justify-end`, not the old
 `text-align` + `inline-block` approach, which could render an oddly-clipped corner on wrapped
 text), assistant turns are plain flowing text with **no** bubble — a colored box reads fine for a
 short user message but wraps a longer, often multi-paragraph reply in an odd-looking box instead
@@ -511,18 +546,78 @@ addresses come from `NEXT_PUBLIC_HABIT_MANAGER_ADDRESS` / `NEXT_PUBLIC_PENALTY_E
 ### Design constraints (Figma spec, current phase)
 
 Dark-only theme, no light mode. Exact tokens in `apps/web/app/globals.css`: background
-`#141514`, card `#111211`, translucent white pill/surface fill `rgba(255,255,255,0.04)`
-(`--surface`), divider `rgba(255,255,255,0.2)` (`--border`), plus three accents — coral
-`#FE7667` (`--warning`, used for today's countdown / "Missed"), mint `#67FE90` (`--success`,
-used for "Completed"), and amber `#FDBA3B` (`--flame`, reserved for exactly two
+`#090806` (a direct brand-color update — was `#141514`), card `#111211` (left as-is; the update
+only specified background, so the page is now technically a touch darker than the card, a subtle
+flip from before but not something to "fix" without being asked), foreground `#ffffff`
+(`--foreground` — every "primary button" in the app is a plain white fill, `bg-foreground`, with
+dark text, `text-background`; a brief pass introduced a separate gold `--primary` token and moved
+all ~30 of those call sites onto it, since reverted back to `bg-foreground` — the user's actual
+brand-color request only covered the page background and the glow/mint palette below, not the
+button convention, so there is no `--primary` token anymore), translucent white pill/surface fill
+`rgba(255,255,255,0.04)` (`--surface`), divider `rgba(255,255,255,0.2)` (`--border`), plus three
+accents — coral `#FE7667` (`--warning`, used for today's countdown / "Missed"), mint `#67FE90`
+(`--success`, used for "Completed" — a deliberately distinct semantic green, not part of the
+glow/mint→gold conversion below), and amber `#FDBA3B` (`--flame`, reserved for exactly two
 gamification/AI-flavored spots: `AppHeader.tsx`'s streak-flame badge and `InsightCard.tsx` — not
 a general-purpose accent, don't reach for it elsewhere without a similar reason). Text uses
-opacity tiers on white rather than separate grey colors (`--muted` = 0.6; several one-off
-opacity classes like `text-white/45` are used inline for tiers the token set doesn't cover —
-check `HabitList.tsx`/`page.tsx` before adding a new one).
+opacity tiers on white rather than separate grey colors (`--muted` = 0.6; several one-off opacity
+classes like `text-white/45` are used inline for tiers the token set doesn't cover — check
+`HabitList.tsx`/`page.tsx` before adding a new one).
 
-Fonts: `Rakkas` for the "Argus" wordmark only (`font-display`), `DM Sans` for everything else
-(`next/font/google`, wired in `app/layout.tsx`).
+Fonts: `DM Sans` for everything else (`next/font/google`, wired in `app/layout.tsx`). `Rakkas`
+(`font-display`) briefly went vestigial when the wordmark became a real PNG (see below) — it's
+back in use now, but for `LandingScreen.tsx`'s headline ("Commit your money. Keep your word."),
+not the logo. Don't reintroduce `font-display` text as a logo stand-in; if a new screen needs the
+mark itself, reuse the actual PNGs below, not live text.
+
+**Logo/brand assets — real PNGs now, not a Phosphor icon + live text.** `public/argus-
+wordmark.png` (894×313, icon+"Argus" lockup) and `public/argus-logomark.png` (157×157, icon
+only) are both white-on-transparent, designed to sit on the app's dark surfaces — composite them
+onto something dark to actually see the mark; they render as blank on a white background. Used
+via `next/image` (not a plain `<img>` — these are static files in `public/`, the normal
+next/image case, unlike the dynamic per-wallet data-URI icons in `ConnectButton.tsx` which stay
+plain `<img>`): the full wordmark appears exactly once, in `LandingScreen.tsx`'s top bar (the
+most spacious brand-mark spot, pre-auth); every other screen (i.e. `AppHeader.tsx`, mounted on
+every authenticated screen) uses the icon-only logomark, no accompanying text — replaced the old
+`<Eye weight="fill"/><span className="font-display">Argus</span>` placeholder in both spots.
+`WelcomeModal.tsx`'s own `Eye` icon (one of four step-illustration icons) is unrelated and was
+left alone — it's a thematic "watching/verifying" glyph for that one step, not a brand-logo
+placement.
+
+**Brand texture (gold glow, grain, dots) — infused subtly across more surfaces, per a direct
+branding decision.** Two separate changes, done together:
+1. **Color**: `GlowBackground.tsx`'s 5-stop radial-gradient glow and the "Chat with Argus"
+   button's conic-gradient hover glow (`app/page.tsx`) both moved from an original 5-color
+   rainbow (pink/gold/mint/blue/purple) to a monochromatic gold family anchored on the brand
+   gold — `#fde9be` (pale gold tint) → `#f5b94c` (the exact brand gold, kept as an anchor) →
+   `#e0a233` (medium gold) → `#c08a2e` (deeper amber) → `#7a5518` (dark shade) — same
+   positions/shapes each stop already had, only the colors changed. (A brief intermediate pass
+   repainted this as a green/mint family instead — `#a8ffd1` → `#6bffb8` → `#3ddc97` → `#1fae66`
+   → `#0d7a4a` — since reverted back to gold per the user's actual request, which was
+   specifically "background to `#090806`, and anywhere there's green mint → `#F5B94C` and its
+   tints/shades.") The two glow moments are kept in sync deliberately (documented since
+   `GlowBackground.tsx` was first written — "the two glow moments read as the same family of
+   color").
+2. **Texture reach**: `components/GrainOverlay.tsx` (new) extracted the fractal-noise SVG data
+   URI that used to live only inline inside `DotGrid.tsx` into a shared constant, and mounts one
+   always-on, viewport-pinned copy once in `app/layout.tsx` (`fixed inset-0 -z-10
+   opacity-[0.02]` — negative z-index specifically so it paints *behind* ordinary in-flow content
+   rather than over it, since a positive z-index on a positioned element paints after normal-flow
+   siblings in the same stacking context) — every screen gets the same faint grain uniformly now,
+   including ones that never mount `GlowBackground`/`DotGrid` at all. `DotGrid.tsx` imports the
+   same constant instead of keeping its own duplicate copy. Separately, the `GlowBackground`/
+   `DotGrid` pairing itself was extended to two surfaces that didn't have it before: `Modal.tsx`
+   (intensity `0.4` — since every overlay in the app routes through this one component, this
+   brands all of them — Settings/Wallet/Streak/History/Recover/the `ConnectButton` wallet-picker —
+   at once) and `LandingScreen.tsx`'s hero (intensity `0.5`). Both lower than the dashboard card's
+   `1` baseline, deliberately — "very subtle" was an explicit instruction, and both are smaller,
+   more content-dense surfaces than the big dashboard card. `AppHeader.tsx` was deliberately left
+   untouched — it's a thin chrome strip directly on the page background, not a bounded card/panel
+   the way everything else using these components is; forcing the same treatment onto a slim row
+   risked looking clipped rather than branded. `ChatSidebar.tsx` was also explicitly left
+   untouched in this pass (still at its earlier diagnostic `intensity={1.4}` and still carrying a
+   `TEMPORARY DEBUG PROBE` div from an unresolved visibility investigation) — held back
+   specifically until that's confirmed working in a real browser, not part of this change.
 
 **No outlines/borders anywhere** — selection state and grouping are shown by fill
 (`bg-foreground text-background` vs `bg-surface`) or opacity, never a border, with exactly two
@@ -669,7 +764,22 @@ a rejected/cancelled signature doesn't lose an already-valid name change, and `n
   (Phantom + MetaMask is the confirmed-live repro), wagmi registers one connector per
   EIP-6963-announced provider, and blindly picking "the first `injected` one" can grab a
   non-EVM provider that returns a malformed address. List every `connectors` entry and let the
-  user choose (`ConnectButton.tsx`).
+  user choose — `ConnectButton.tsx` renders a single "Connect Wallet" button on the landing
+  screen and moved the actual connector list (one row per detected extension, still every
+  `connectors` entry, not just the first) into a `Modal.tsx` popup instead of stacking every
+  connector as its own button directly on the page — that stack was fine with one extension
+  installed but read as alarming/cluttered with several. The same popup's second step (address +
+  Sign in/Disconnect, shown once `isConnected`) is non-dismissible (`Modal`'s `dismissible={false}`)
+  since Sign In or Disconnect are the only useful next actions there; `open={modalOpen ||
+  isConnected}` (not just local `modalOpen` state) so a reload that lands here already connected
+  but not yet signed in (session cookie missing/expired) reopens straight to that step instead of
+  a bare button with no obvious next move. Each row's icon is the real wallet logo, not a
+  hardcoded/bundled brand asset — every EIP-6963-announced provider (how `injected()` discovers
+  each installed extension) reports its own `icon` as a data URI on the `Connector` object itself
+  (`connector.icon`, `@wagmi/core`'s `createConnector` type), so MetaMask/Rabby/Phantom/etc. show
+  their actual mark for free; only a connector with no EIP-6963 announcement (bare
+  `window.ethereum`, no `icon`) falls back to a generic Phosphor `Wallet` glyph. Same `icon` field
+  off `useAccount().connector` (the currently-active one) is reused for the second step's badge.
 - **A valid session can outlive the actual wallet connection.** The session cookie (7-day TTL)
   survives a browser restart; the wagmi/wallet connection does not always reconnect cleanly
   after one. Any component that writes on-chain must check `useAccount().isConnected` itself

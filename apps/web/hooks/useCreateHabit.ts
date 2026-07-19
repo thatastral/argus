@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEngine && addresses.argusFactory);
 
@@ -74,13 +75,14 @@ export function useCreateHabit() {
           name,
           targetDays: targetDays ?? null,
           deadlineTime: deadlineTime ?? null,
+          isNewHabit: true,
         }),
       });
       if (!mirrorRes.ok) throw new Error("Habit created on-chain but failed to save — refresh and try again");
 
       return true;
     } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to create habit on-chain");
+      if (!cancelledRef.current) setError(friendlyErrorMessage(err, "Failed to create habit on-chain"));
       return false;
     } finally {
       if (!cancelledRef.current) setBusy(false);

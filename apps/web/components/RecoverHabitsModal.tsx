@@ -5,6 +5,7 @@ import type { UnmirroredHabit } from "@/hooks/useUnmirroredHabits";
 import { Modal } from "./Modal";
 import { Spinner } from "./Spinner";
 import { useToast } from "./Toast";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 /// Dashboard counterpart to SetupFlow.tsx's inline recovery step — same underlying detection
 /// (useUnmirroredHabits.ts), but rendered as a Modal since it can surface any time "+ Add Habit"
@@ -35,14 +36,14 @@ export function RecoverHabitsModal({
         const res = await fetch("/api/habits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contractIndex: h.contractIndex, name }),
+          body: JSON.stringify({ contractIndex: h.contractIndex, name, isNewHabit: true }),
         });
         if (!res.ok) throw new Error("Failed to save a recovered habit — try again");
       }
       toast(`Recovered ${habits.length} habit${habits.length === 1 ? "" : "s"}`);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save recovered habits");
+      setError(friendlyErrorMessage(err, "Failed to save recovered habits"));
     } finally {
       setSaving(false);
     }

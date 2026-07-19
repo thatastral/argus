@@ -16,6 +16,7 @@ import { HabitDeadlineTimePicker } from "./HabitDeadlineTimePicker";
 import { WalletReconnect } from "./WalletReconnect";
 import { DeployWalletForm } from "./DeployWalletForm";
 import { Spinner } from "./Spinner";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 // "penalty" (consequence + per-habit stake) now comes before "wallet" (deploy + fund) and
 // "habit" moves to last — a habit can only ever be created once a funded vault exists, so
@@ -27,7 +28,18 @@ type Step = (typeof STEPS)[number];
 
 const contractsDeployed = Boolean(addresses.habitManager && addresses.penaltyEngine && addresses.argusFactory);
 
-export function SetupFlow({ onComplete }: { onComplete: () => void }) {
+export function SetupFlow({
+  onComplete,
+  onBackToLanding,
+}: {
+  onComplete: () => void;
+  // Only ever wired to the "profile" step's Back button (see showBack below) — every other
+  // step's Back stays internal step-navigation via back(). Signing out and disconnecting mid-way
+  // through wallet-deploy/habit-creation would abandon an in-progress on-chain step with no
+  // clean way back in, so this is deliberately only offered on the one step that has nothing to
+  // lose yet.
+  onBackToLanding: () => void;
+}) {
   const { isConnected } = useAccount();
   const [displayName, setDisplayName] = useState("");
   const [vaultAsset, setVaultAsset] = useState<"mon" | "usdc">("mon");
@@ -92,7 +104,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
         const res = await fetch("/api/habits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ contractIndex: h.contractIndex, name }),
+          body: JSON.stringify({ contractIndex: h.contractIndex, name, isNewHabit: true }),
         });
         if (!res.ok) throw new Error("Failed to save a recovered habit — try again");
       }
@@ -100,7 +112,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       setStep("done");
       onComplete();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save recovered habits");
+      setError(friendlyErrorMessage(err, "Failed to save recovered habits"));
     } finally {
       setSavingRecovered(false);
     }
@@ -131,7 +143,7 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       if (!res.ok) throw new Error("Could not save profile");
       setStep("penalty");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save profile");
+      setError(friendlyErrorMessage(err, "Could not save profile"));
     } finally {
       setBusy(false);
     }
@@ -184,14 +196,14 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       if (!mirrorRes.ok) throw new Error("Penalty configured on-chain but failed to save — refresh and try again");
       setStep("wallet");
     } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to configure penalty on-chain");
+      if (!cancelledRef.current) setError(friendlyErrorMessage(err, "Failed to configure penalty on-chain"));
     } finally {
       if (!cancelledRef.current) setBusy(false);
     }
   }
 
 
-  const showBack = step !== "profile" && step !== "done";
+  const showBack = step !== "done";
 
   const STEP_NUMBER: Record<(typeof STEPS)[number], number> = { profile: 1, penalty: 2, wallet: 3, habit: 4, done: 4 };
   const totalSteps = 4;
@@ -216,7 +228,10 @@ export function SetupFlow({ onComplete }: { onComplete: () => void }) {
       )}
 
       {showBack && (
-        <button onClick={back} className="flex items-center gap-1 text-xs text-muted underline">
+        <button
+          onClick={step === "profile" ? onBackToLanding : back}
+          className="flex items-center gap-1 text-xs text-muted underline"
+        >
           <ArrowLeft size={12} weight="bold" />
           Back
         </button>

@@ -5,6 +5,7 @@ import { parseEther, parseUnits } from "viem";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
+import { friendlyErrorMessage } from "@/lib/formatError";
 import { useAccountabilityWallet } from "./useAccountabilityWallet";
 
 /// Deposit/withdraw against the connected user's Accountability Wallet — extracted out of
@@ -68,7 +69,7 @@ export function useVaultTransfer() {
       refetchBalance();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Deposit failed");
+      setError(friendlyErrorMessage(err, "Deposit failed"));
       return false;
     } finally {
       setActiveAction(null);
@@ -91,7 +92,7 @@ export function useVaultTransfer() {
       refetchAll();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Withdraw failed — amount may exceed your Available balance");
+      setError(friendlyErrorMessage(err, "Withdraw failed — amount may exceed your Available balance"));
       return false;
     } finally {
       setActiveAction(null);

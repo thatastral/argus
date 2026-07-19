@@ -14,6 +14,7 @@ import { DeployWalletForm } from "./DeployWalletForm";
 import { Spinner } from "./Spinner";
 import { Tooltip } from "./Tooltip";
 import { useToast } from "./Toast";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 /// Shared address/copy/explorer/disconnect row for the vault address.
 function WalletHeaderRow({ address, onSignOut }: { address: `0x${string}`; onSignOut: () => void }) {
@@ -130,7 +131,7 @@ export function WalletStatus({ onSignOut }: { onSignOut: () => void }) {
       });
       refetchBalance();
     } catch (err) {
-      setMintError(err instanceof Error ? err.message : "Mint failed");
+      setMintError(friendlyErrorMessage(err, "Mint failed"));
     } finally {
       setMinting(false);
     }

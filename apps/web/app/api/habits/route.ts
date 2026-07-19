@@ -17,6 +17,11 @@ const bodySchema = z.object({
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
     .nullable()
     .optional(),
+  // True only from a genuine first-mirror-write for this contractIndex — the fresh-create path
+  // (useCreateHabit.ts) and the two orphan-recovery paths (RecoverHabitsModal.tsx,
+  // SetupFlow.tsx's inline recovery step), never the rename path (useRenameHabit.ts). See the
+  // stale-completions cleanup below for why this matters.
+  isNewHabit: z.boolean().optional(),
 });
 
 /// Called right after the client's own HabitManager.createHabit() tx confirms, so the
@@ -36,6 +41,26 @@ export async function POST(request: Request) {
   const supabase = supabaseAdmin();
   if (!(await ensureUser(supabase, wallet))) {
     return NextResponse.json({ error: "Failed to ensure user record" }, { status: 500 });
+  }
+
+  if (parsed.data.isNewHabit) {
+    // A genuinely new on-chain index can't have legitimate completion history — within one
+    // contract deployment, HabitManager never reuses a deactivated index (see CLAUDE.md's
+    // 3-habit-cap gotcha), so any habit_completions row already sitting at this
+    // (wallet_address, contract_index) predates this habit's real identity. Confirmed-plausible
+    // live cause: a Monad testnet redeploy resets habitCount to 0, so a brand-new habit can land
+    // on an index that still has a prior deployment's completion row for today, making it read
+    // as instantly "Completed" with no proof ever submitted. Purge before the upsert below,
+    // across all days (not just today) — a stale past-day row would equally corrupt the new
+    // habit's history view.
+    const { error: cleanupError } = await supabase
+      .from("habit_completions")
+      .delete()
+      .eq("wallet_address", wallet)
+      .eq("contract_index", parsed.data.contractIndex);
+    if (cleanupError) {
+      return NextResponse.json({ error: "Failed to prepare habit slot" }, { status: 500 });
+    }
   }
 
   const payload: Record<string, unknown> = {

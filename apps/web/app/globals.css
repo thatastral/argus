@@ -5,8 +5,10 @@
    approximated. Single (dark) theme, no light-mode variant — the spec doesn't define one. */
 
 :root {
-  --background: #141514; /* page */
-  --card: #111211; /* the big rounded content card, and modal/sheet panels */
+  --background: #090806; /* page — darker, warmer near-black per a direct brand-color update
+    (was #141514) */
+  --card: #0e0d0b; /* the big rounded content card (habits/welcome/insight), and modal/sheet
+    panels — direct brand-color update, was #111211 */
   --foreground: #ffffff;
   --muted: rgba(255, 255, 255, 0.6); /* general secondary text default — components needing a
     precise spec tier (0.7 / 0.45 / 0.38 / 0.13) use an explicit text-white/NN utility instead */

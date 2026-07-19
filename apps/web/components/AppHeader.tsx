@@ -1,6 +1,7 @@
 "use client";
 
-import { ArrowClockwise, Eye, Fire, GearSix } from "@phosphor-icons/react";
+import Image from "next/image";
+import { ArrowClockwise, Fire, GearSix } from "@phosphor-icons/react";
 import { useAccountabilityWallet } from "@/hooks/useAccountabilityWallet";
 import { useStreak } from "@/hooks/useStreak";
 
@@ -10,7 +11,7 @@ function truncateAddress(address: string) {
 
 const PRESS_FEEDBACK = "transition-transform duration-150 ease-emil-out active:scale-[0.97]";
 
-/// Page-level chrome: logo/wordmark on the left, streak + balance pills on the right. Stays
+/// Page-level chrome: icon-only brand logomark on the left, streak + balance pills on the right. Stays
 /// mounted outside whatever shifts when the chat sidebar opens (see app/page.tsx) — the wrapper
 /// there reserves right padding for the sidebar so this row never sits underneath it.
 /// Settings isn't part of either reference mock — added here as a small icon since it still
@@ -51,10 +52,10 @@ export function AppHeader({
 
   return (
     <header className="flex items-center justify-between gap-2 px-4 py-5 sm:px-8">
-      <div className="flex items-center gap-1.5">
-        <Eye size={23} weight="fill" />
-        <span className="font-display text-2xl tracking-wide">Argus</span>
-      </div>
+      {/* Icon-only brand mark on every authenticated screen (the full wordmark lockup is reserved
+          for LandingScreen.tsx's more spacious pre-auth hero) — public/argus-logomark.png,
+          intrinsic 157×157, replacing the old Phosphor Eye + Rakkas text placeholder. */}
+      <Image src="/argus-logomark.png" alt="Argus" width={157} height={157} priority className="h-8 w-8" />
 
       <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
         <button

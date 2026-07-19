@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { CheckCircle, Eye, ShieldCheck, Wallet } from "@phosphor-icons/react";
 import { Modal } from "./Modal";
 
@@ -31,22 +30,26 @@ const STEPS = [
 
 /// Purely cosmetic, one-time intro — localStorage rather than a Supabase column (no migration,
 /// no cross-device persistence needed for something this low-stakes; resets if the user clears
-/// browser data, which is an acceptable trade-off here).
-function hasSeenWelcome(): boolean {
+/// browser data, which is an acceptable trade-off here). Exported (not just used internally)
+/// since `app/page.tsx` now owns the open/closed state itself — see the doc comment on
+/// `WelcomeModal` below for why.
+export function hasSeenWelcome(): boolean {
   if (typeof window === "undefined") return true;
   return window.localStorage.getItem(STORAGE_KEY) === "1";
 }
 
-export function WelcomeModal() {
-  const [open, setOpen] = useState(() => !hasSeenWelcome());
+export function markWelcomeSeen() {
+  window.localStorage.setItem(STORAGE_KEY, "1");
+}
 
-  function dismiss() {
-    window.localStorage.setItem(STORAGE_KEY, "1");
-    setOpen(false);
-  }
-
+/// Now a controlled component (`open`/`onClose`, not a self-managed `useState`) so the same
+/// four-step content can be driven by two different callers without duplicating it: `app/
+/// page.tsx`'s post-signin auto-open (gated on `hasSeenWelcome()`/`markWelcomeSeen()` above, one
+/// time only) and `LandingScreen.tsx`'s new pre-auth "How it works" link (an explicit click,
+/// re-openable anytime, no localStorage bookkeeping needed on that path).
+export function WelcomeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Modal open={open} title="Welcome to Argus" onClose={dismiss}>
+    <Modal open={open} title="Welcome to Argus" onClose={onClose}>
       <div className="space-y-5">
         <p className="text-sm text-muted">A quick look at how accountability actually works here.</p>
         <div className="space-y-4">
@@ -63,7 +66,7 @@ export function WelcomeModal() {
           ))}
         </div>
         <button
-          onClick={dismiss}
+          onClick={onClose}
           className="w-full rounded-md bg-foreground px-3 py-2 text-sm text-background transition-transform duration-150 ease-emil-out active:scale-[0.97]"
         >
           Let&apos;s go

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 /// Renaming needs no on-chain call — habit names are Supabase-only (see CLAUDE.md's on-chain
 /// vs off-chain split). Reuses the same POST /api/habits upsert that habit creation uses; on an
@@ -21,7 +22,7 @@ export function useRenameHabit() {
       if (!res.ok) throw new Error("Failed to rename habit");
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to rename habit");
+      setError(friendlyErrorMessage(err, "Failed to rename habit"));
       return false;
     } finally {
       setBusy(false);

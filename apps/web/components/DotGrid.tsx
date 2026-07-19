@@ -1,3 +1,5 @@
+import { NOISE_DATA_URL } from "./GrainOverlay";
+
 /// Subtle animated dot-grid background, per Downloads/Animated Dots.md's brief. No per-dot DOM
 /// nodes and no JS timers — a real per-dot-random implementation would need thousands of
 /// elements or a canvas/JS animation loop, exactly what the brief's own performance section says
@@ -14,10 +16,6 @@
 /// surfaces like the chat sidebar or onboarding, where legibility matters more).
 const DOT_PATTERN = "radial-gradient(circle, rgba(138,138,138,0.12) 1px, transparent 1.6px)";
 const DOT_SIZE = "24px 24px";
-
-// Inline fractal-noise SVG, no external asset — a standard lightweight grain-texture technique.
-const NOISE_DATA_URL =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E";
 
 const TWINKLE_LAYERS = ["animate-dot-twinkle-a", "animate-dot-twinkle-b", "animate-dot-twinkle-c"] as const;
 

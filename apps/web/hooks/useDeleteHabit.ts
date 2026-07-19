@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useAccount, usePublicClient, useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 /// "Delete" a habit — HabitManager has no slot reuse, so this is really
 /// setHabitActive(index, false) (see CLAUDE.md's gotcha on the 3-habit cap counting total ever
@@ -78,7 +79,7 @@ export function useDeleteHabit() {
       await syncMirror(contractIndex);
       return true;
     } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to delete habit");
+      if (!cancelledRef.current) setError(friendlyErrorMessage(err, "Failed to delete habit"));
       return false;
     } finally {
       if (!cancelledRef.current) setBusy(false);

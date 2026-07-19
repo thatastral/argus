@@ -6,6 +6,7 @@ import { useWriteContract } from "wagmi";
 import { addresses, abis } from "@/lib/contracts";
 import { activeChain } from "@/lib/wagmi";
 import { PENALTY_TYPE_INDEX, type PenaltyType } from "@/lib/penalty";
+import { friendlyErrorMessage } from "@/lib/formatError";
 import { useAccountabilityWallet } from "./useAccountabilityWallet";
 
 /// Shared configurePenalty() + Supabase mirror sequence — extracted out of SettingsSheet.tsx
@@ -64,7 +65,7 @@ export function useSetStake() {
 
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update stake");
+      setError(friendlyErrorMessage(err, "Failed to update stake"));
       return false;
     } finally {
       setBusy(false);

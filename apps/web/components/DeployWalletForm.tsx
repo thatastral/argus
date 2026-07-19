@@ -8,6 +8,7 @@ import { WalletReconnect } from "./WalletReconnect";
 import { Spinner } from "./Spinner";
 import { Tooltip } from "./Tooltip";
 import { useToast } from "./Toast";
+import { friendlyErrorMessage } from "@/lib/formatError";
 
 /// Asset choice + deploy button for a user's AccountabilityWallet. Shared between SetupFlow's
 /// wallet step (first-time setup) and WalletStatus's recovery path (an Easy Mode user who
@@ -54,7 +55,8 @@ export function DeployWalletForm({
       toast("Accountability Wallet deployed");
       onDeployed();
     } catch (err) {
-      if (!cancelledRef.current) setError(err instanceof Error ? err.message : "Failed to deploy Accountability Wallet");
+      if (!cancelledRef.current)
+        setError(friendlyErrorMessage(err, "Failed to deploy Accountability Wallet"));
     } finally {
       if (!cancelledRef.current) setBusy(false);
     }
